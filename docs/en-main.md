@@ -1,7 +1,5 @@
 # LuminaEngine Documentation
-<p align="center">
-  <img width="492" alt="LuminaEngine Logo" src="https://github.com/user-attachments/assets/81805185-14c1-448a-83bd-d9bee4dcc777" />
-</p>
+<img width="492" height="312" alt="le" src="https://github.com/user-attachments/assets/81805185-14c1-448a-83bd-d9bee4dcc777" />
 
 ## 1. Introduction and Philosophy
 
