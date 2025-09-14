@@ -28,7 +28,7 @@ It's perfect for educational purposes, game jams, and rapid prototyping of 3D we
 
 1.  Clone this repository.
 2.  Open `index.html` in your browser to see the project hub.
-3.  Explore the `/game/Maze/` folder to see a practical example of the engine in action.
+3.  Explore the `/example/3dGame/` folder to see a practical example of the engine in action.
 4.  Check out the detailed [Documentation](docs/en-main.md) to learn more about the API.
 
 </details>
@@ -58,7 +58,7 @@ It's perfect for educational purposes, game jams, and rapid prototyping of 3D we
 
 1.  Клонируйте этот репозиторий.
 2.  Откройте файл `index.html` в браузере, чтобы увидеть хаб проекта.
-3.  Изучите папку `/game/Maze/`, чтобы увидеть практический пример работы движка.
+3.  Изучите папку `/example/3dGame/`, чтобы увидеть практический пример работы движка.
 4.  Ознакомьтесь с подробной [Документацией](docs/ru-main.md), чтобы узнать больше об API.
 
 </details>
