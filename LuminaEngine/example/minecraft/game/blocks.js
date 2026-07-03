@@ -9,7 +9,12 @@ export const BLOCK = {
     GRASS: 4,
     OAK_LOG: 5,
     OAK_LEAVES: 6,
-    
+    COAL_ORE: 7,
+    IRON_ORE: 8,
+
+    // ВАЖНО: id блоков здесь должны совпадать с константами BLOCK_* в
+    // crates/lumina-worldgen/src/lib.rs — генератор мира зашивает эти id
+    // напрямую в чанк на стороне Rust.
     properties: {
         0: { name: 'air', isTransparent: true, isSolid: false },
         1: { name: 'bedrock', isBreakable: false, isSolid: true, texture: 'bedrock.png' },
@@ -18,6 +23,8 @@ export const BLOCK = {
         4: { name: 'grass', isSolid: true, texture: { top: 'grass_top.png', bottom: 'dirt.png', side: 'grass_side.png' } },
         5: { name: 'oak_log', isSolid: true, texture: { top: 'oak_log_top.png', bottom: 'oak_log_top.png', side: 'oak_log.png' } },
         6: { name: 'oak_leaves', isTransparent: true, isSolid: true, texture: 'oak_leaves.png' },
+        7: { name: 'coal_ore', isSolid: true, texture: 'coal_ore.png' },
+        8: { name: 'iron_ore', isSolid: true, texture: 'iron_ore.png' },
     },
 
     get(id) {

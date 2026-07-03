@@ -1,6 +1,28 @@
 /* @ts-self-types="./lumina_worldgen.d.ts" */
 
 /**
+ * Генерирует воксели чанка целиком: рельеф (высота из noise2d),
+ * пещеры (связный 3D value-noise, вырезает воздух внутри камня) и руды
+ * (независимая по вокселю вероятность на основе hash3d, глубже — реже).
+ *
+ * Возвращает массив длиной chunk_size * world_height * chunk_size,
+ * index = y*chunk_size*chunk_size + z*chunk_size + x — совпадает с
+ * раскладкой Chunk.data в game/World.js.
+ * @param {number} chunk_x
+ * @param {number} chunk_z
+ * @param {number} chunk_size
+ * @param {number} world_height
+ * @param {number} seed
+ * @returns {Uint8Array}
+ */
+export function generate_chunk_voxels(chunk_x, chunk_z, chunk_size, world_height, seed) {
+    const ret = wasm.generate_chunk_voxels(chunk_x, chunk_z, chunk_size, world_height, seed);
+    var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v1;
+}
+
+/**
  * Возвращает карту высот чанка (chunk_size * chunk_size значений в [0,1]),
  * index = z * chunk_size + x — совместимо с прежним GPU-путём.
  * @param {number} chunk_x
@@ -39,6 +61,11 @@ function getArrayF32FromWasm0(ptr, len) {
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
+function getArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
 let cachedFloat32ArrayMemory0 = null;
 function getFloat32ArrayMemory0() {
     if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
@@ -47,12 +74,21 @@ function getFloat32ArrayMemory0() {
     return cachedFloat32ArrayMemory0;
 }
 
+let cachedUint8ArrayMemory0 = null;
+function getUint8ArrayMemory0() {
+    if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
+        cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
+    }
+    return cachedUint8ArrayMemory0;
+}
+
 let wasmModule, wasmInstance, wasm;
 function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
     cachedFloat32ArrayMemory0 = null;
+    cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
 }

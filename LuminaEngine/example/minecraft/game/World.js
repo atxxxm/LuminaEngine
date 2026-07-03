@@ -5,7 +5,7 @@ import { BLOCK } from './blocks.js';
 // --- ДОБАВЛЕНО: Rust/WASM greedy-мешер вокселей ---
 import initMeshing, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
 // --- ДОБАВЛЕНО: Rust/WASM генератор карты высот (раньше — синхронный GPU readback) ---
-import initWorldgen, { generate_height_map } from '../../../engine/wasm/lumina-worldgen/lumina_worldgen.js';
+import initWorldgen, { generate_chunk_voxels } from '../../../engine/wasm/lumina-worldgen/lumina_worldgen.js';
 // --- ДОБАВЛЕНО: Rust/WASM RLE-сжатие данных чанков для сохранения мира ---
 import initSave, { encode_chunk, decode_chunk } from '../../../engine/wasm/lumina-save/lumina_save.js';
 
@@ -241,41 +241,15 @@ export class World {
         }
     }
 
-    // --- ИЗМЕНЕНИЕ: Полностью переписан метод генерации данных чанка ---
+    // Рельеф, пещеры и руды считаются целиком в Rust/WASM — JS только
+    // забирает готовый буфер вокселей.
     generateChunkData(chunkX, chunkZ) {
         const key = this.getChunkKey(chunkX, chunkZ);
         if (this.chunks[key]) return this.chunks[key];
 
         const chunk = new Chunk(chunkX, chunkZ);
+        chunk.data = generate_chunk_voxels(chunkX, chunkZ, CHUNK_SIZE, WORLD_HEIGHT, this.seed);
         this.chunks[key] = chunk;
-
-        // 1. Получаем карту высот для этого чанка (Rust/WASM, CPU)
-        const heightMap = generate_height_map(chunkX, chunkZ, CHUNK_SIZE, this.seed);
-
-        // 2. Заполняем чанк данными на основе полученной карты высот
-        for (let x = 0; x < CHUNK_SIZE; x++) {
-            for (let z = 0; z < CHUNK_SIZE; z++) {
-                const index = z * CHUNK_SIZE + x;
-                const normalizedHeight = heightMap[index]; // Высота от 0.0 до 1.0
-
-                // Конвертируем нормализованную высоту в высоту в блоках
-                const height = Math.floor(normalizedHeight * 20) + 40;
-
-                for (let y = 0; y < WORLD_HEIGHT; y++) {
-                    if (y === 0) {
-                        chunk.setVoxel(x, y, z, BLOCK.BEDROCK);
-                    } else if (y < height - 3) {
-                        chunk.setVoxel(x, y, z, BLOCK.STONE);
-                    } else if (y < height) {
-                        chunk.setVoxel(x, y, z, BLOCK.DIRT);
-                    } else if (y === height) {
-                        chunk.setVoxel(x, y, z, BLOCK.GRASS);
-                    } else {
-                        chunk.setVoxel(x, y, z, BLOCK.AIR);
-                    }
-                }
-            }
-        }
         return chunk;
     }
 

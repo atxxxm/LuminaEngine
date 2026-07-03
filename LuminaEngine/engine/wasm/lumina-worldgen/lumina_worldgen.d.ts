@@ -2,6 +2,17 @@
 /* eslint-disable */
 
 /**
+ * Генерирует воксели чанка целиком: рельеф (высота из noise2d),
+ * пещеры (связный 3D value-noise, вырезает воздух внутри камня) и руды
+ * (независимая по вокселю вероятность на основе hash3d, глубже — реже).
+ *
+ * Возвращает массив длиной chunk_size * world_height * chunk_size,
+ * index = y*chunk_size*chunk_size + z*chunk_size + x — совпадает с
+ * раскладкой Chunk.data в game/World.js.
+ */
+export function generate_chunk_voxels(chunk_x: number, chunk_z: number, chunk_size: number, world_height: number, seed: number): Uint8Array;
+
+/**
  * Возвращает карту высот чанка (chunk_size * chunk_size значений в [0,1]),
  * index = z * chunk_size + x — совместимо с прежним GPU-путём.
  */
@@ -11,6 +22,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly generate_chunk_voxels: (a: number, b: number, c: number, d: number, e: number) => [number, number];
     readonly generate_height_map: (a: number, b: number, c: number, d: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
