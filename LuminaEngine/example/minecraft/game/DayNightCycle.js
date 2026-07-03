@@ -11,6 +11,11 @@ export class DayNightCycle extends Component {
         this.sun = null;
         this.ambientLight = null;
         this.fog = null;
+
+        this.dayColor = new THREE.Color(0x87ceeb);
+        this.nightColor = new THREE.Color(0x000033);
+        this.sunsetColor = new THREE.Color(0xff8c00);
+        this.skyColor = new THREE.Color();
     }
 
     start() {
@@ -41,20 +46,15 @@ export class DayNightCycle extends Component {
         this.ambientLight.intensity = Math.max(0.1, sunY * 0.5) + 0.1;
 
         // Sky color and fog
-        const dayColor = new THREE.Color(0x87ceeb);
-        const nightColor = new THREE.Color(0x000033);
-        const sunsetColor = new THREE.Color(0xff8c00);
-        
-        let skyColor;
         if (sunY > 0.1) {
-            skyColor = dayColor;
+            this.skyColor.copy(this.dayColor);
         } else if (sunY > -0.1) {
-            skyColor = dayColor.clone().lerp(sunsetColor, 1 - (sunY + 0.1) / 0.2);
+            this.skyColor.copy(this.dayColor).lerp(this.sunsetColor, 1 - (sunY + 0.1) / 0.2);
         } else {
-            skyColor = sunsetColor.clone().lerp(nightColor, 1 - (sunY + 0.2) / 0.1);
+            this.skyColor.copy(this.sunsetColor).lerp(this.nightColor, 1 - (sunY + 0.2) / 0.1);
         }
-        
-        this.engine.renderer.scene.background = skyColor;
-        this.fog.color = skyColor;
+
+        this.engine.renderer.scene.background = this.skyColor;
+        this.fog.color = this.skyColor;
     }
 }
