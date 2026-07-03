@@ -6,6 +6,10 @@ import * as THREE from 'three';
 import { BLOCK } from './blocks.js';
 // --- ДОБАВЛЕНО: Импорт нашего GPU-генератора ---
 import { GPUWorldGenerator } from './GPUWorldGenerator.js';
+// --- ДОБАВЛЕНО: Rust/WASM greedy-мешер вокселей ---
+import init, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
+
+await init();
 
 const CHUNK_SIZE = 8; // Стандартный размер чанка
 const WORLD_HEIGHT = 128;
@@ -21,9 +25,15 @@ const materialCache = {};
 function getMaterial(textureName) {
     if (!materialCache[textureName]) {
         if (!textureCache[textureName]) {
-            textureCache[textureName] = textureLoader.load(`textures/${textureName}`);
-            textureCache[textureName].magFilter = THREE.NearestFilter;
-            textureCache[textureName].minFilter = THREE.NearestFilter;
+            const texture = textureLoader.load(`textures/${textureName}`);
+            texture.magFilter = THREE.NearestFilter;
+            texture.minFilter = THREE.NearestFilter;
+            // Greedy-мешер сливает соседние одинаковые блоки в один большой
+            // квад, поэтому UV может выходить за пределы 0..1 — текстура
+            // должна замащиваться (тайлиться), а не растягиваться.
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.RepeatWrapping;
+            textureCache[textureName] = texture;
         }
         const isTransparent = textureName.includes('leaves');
         materialCache[textureName] = new THREE.MeshLambertMaterial({
@@ -33,6 +43,42 @@ function getMaterial(textureName) {
         });
     }
     return materialCache[textureName];
+}
+
+// Общий на все регионы список материалов + таблицы свойств блоков по id,
+// которые передаются в WASM-мешер. Строятся один раз из BLOCK.properties.
+const MAX_BLOCK_ID = 256;
+const globalMaterials = [];
+const materialIndexOf = {};
+const isTransparentTable = new Uint8Array(MAX_BLOCK_ID);
+const topMaterialTable = new Uint16Array(MAX_BLOCK_ID);
+const bottomMaterialTable = new Uint16Array(MAX_BLOCK_ID);
+const sideMaterialTable = new Uint16Array(MAX_BLOCK_ID);
+
+function materialIndexFor(textureName) {
+    if (materialIndexOf[textureName] === undefined) {
+        materialIndexOf[textureName] = globalMaterials.length;
+        globalMaterials.push(getMaterial(textureName));
+    }
+    return materialIndexOf[textureName];
+}
+
+for (const idKey of Object.keys(BLOCK.properties)) {
+    const id = Number(idKey);
+    const props = BLOCK.properties[id];
+    isTransparentTable[id] = props.isTransparent ? 1 : 0;
+
+    if (!props.texture) continue;
+    if (typeof props.texture === 'object') {
+        topMaterialTable[id] = materialIndexFor(props.texture.top);
+        bottomMaterialTable[id] = materialIndexFor(props.texture.bottom);
+        sideMaterialTable[id] = materialIndexFor(props.texture.side);
+    } else {
+        const idx = materialIndexFor(props.texture);
+        topMaterialTable[id] = idx;
+        bottomMaterialTable[id] = idx;
+        sideMaterialTable[id] = idx;
+    }
 }
 
 // Класс для хранения данных о блоках. Больше не занимается рендерингом.
@@ -50,7 +96,7 @@ class Chunk {
         const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
         return this.data[index];
     }
-    
+
     setVoxel(x, y, z, value) {
         const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
         this.data[index] = value;
@@ -59,7 +105,6 @@ class Chunk {
 
 // Новый класс для управления одним большим мешем, объединяющим несколько чанков
 class WorldRegion {
-    // ... (Этот класс остается без изменений)
     constructor(rx, rz, world) {
         this.rx = rx; // Координаты региона
         this.rz = rz;
@@ -68,100 +113,60 @@ class WorldRegion {
         this.needsUpdate = false;
     }
 
+    // Собирает воксели региона (с рамкой в 1 блок по X/Z для корректного
+    // отсечения граней на стыке с соседними регионами) в плоский буфер и
+    // передаёт его в WASM greedy-мешер вместо ручного JS-перебора.
     generateMesh() {
-        const positions = [];
-        const normals = [];
-        const uvs = [];
-        const indices = [];
-        
-        const geometry = new THREE.BufferGeometry();
+        const regionWidth = REGION_SIZE * CHUNK_SIZE;
+        const regionDepth = REGION_SIZE * CHUNK_SIZE;
+        const originX = this.rx * regionWidth;
+        const originZ = this.rz * regionDepth;
 
-        const materials = [];
-        const materialMap = {};
-        let materialIndex = 0;
+        const paddedWidth = regionWidth + 2;
+        const paddedDepth = regionDepth + 2;
+        const voxels = new Uint8Array(paddedWidth * WORLD_HEIGHT * paddedDepth);
 
-        function getMaterialIndex(textureName) {
-            if (materialMap[textureName] === undefined) {
-                materials.push(getMaterial(textureName));
-                materialMap[textureName] = materialIndex++;
-            }
-            return materialMap[textureName];
-        }
-
-        const startChunkX = this.rx * REGION_SIZE;
-        const startChunkZ = this.rz * REGION_SIZE;
-
-        for (let cx = 0; cx < REGION_SIZE; cx++) {
-            for (let cz = 0; cz < REGION_SIZE; cz++) {
-                const chunk = this.world.getChunk(startChunkX + cx, startChunkZ + cz);
-                if (!chunk) continue; 
-
-                for (let y = 0; y < WORLD_HEIGHT; y++) {
-                    for (let z = 0; z < CHUNK_SIZE; z++) {
-                        for (let x = 0; x < CHUNK_SIZE; x++) {
-                            const voxel = chunk.getVoxel(x, y, z);
-                            if (voxel === BLOCK.AIR) continue;
-                            
-                            const blockProps = BLOCK.get(voxel);
-                            const worldX = chunk.x * CHUNK_SIZE + x;
-                            const worldZ = chunk.z * CHUNK_SIZE + z;
-
-                            const neighbors = {
-                                px: this.world.getVoxel(worldX + 1, y, worldZ), nx: this.world.getVoxel(worldX - 1, y, worldZ),
-                                py: this.world.getVoxel(worldX, y + 1, worldZ), ny: this.world.getVoxel(worldX, y - 1, worldZ),
-                                pz: this.world.getVoxel(worldX, y, worldZ + 1), nz: this.world.getVoxel(worldX, y, worldZ - 1),
-                            };
-
-                            const faces = [
-                                { dir: [ 1, 0, 0], corners: [ [1,0,0], [1,1,0], [1,0,1], [1,1,1] ], uvs: [0,0, 0,1, 1,0, 1,1], neighbor: neighbors.px, texture: typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture },
-                                { dir: [-1, 0, 0], corners: [ [0,0,1], [0,1,1], [0,0,0], [0,1,0] ], uvs: [0,0, 0,1, 1,0, 1,1], neighbor: neighbors.nx, texture: typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture },
-                                { dir: [ 0, 1, 0], corners: [ [0,1,1], [1,1,1], [0,1,0], [1,1,0] ], uvs: [0,0, 1,0, 0,1, 1,1], neighbor: neighbors.py, texture: typeof blockProps.texture === 'object' ? blockProps.texture.top : blockProps.texture },
-                                { dir: [ 0,-1, 0], corners: [ [0,0,0], [1,0,0], [0,0,1], [1,0,1] ], uvs: [0,0, 1,0, 0,1, 1,1], neighbor: neighbors.ny, texture: typeof blockProps.texture === 'object' ? blockProps.texture.bottom : blockProps.texture },
-                                { dir: [ 0, 0, 1], corners: [ [1,0,1], [1,1,1], [0,0,1], [0,1,1] ], uvs: [0,0, 0,1, 1,0, 1,1], neighbor: neighbors.pz, texture: typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture },
-                                { dir: [ 0, 0,-1], corners: [ [0,0,0], [0,1,0], [1,0,0], [1,1,0] ], uvs: [0,0, 0,1, 1,0, 1,1], neighbor: neighbors.nz, texture: typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture },
-                            ];
-                            
-                            for (const { dir, corners, uvs: faceUVs, neighbor, texture } of faces) {
-                                const neighborProps = BLOCK.get(neighbor);
-                                if (neighborProps.isTransparent) {
-                                    const ndx = positions.length / 3;
-                                    for (const pos of corners) {
-                                        positions.push(pos[0] + worldX, pos[1] + y, pos[2] + worldZ);
-                                        normals.push(...dir);
-                                    }
-                                    
-                                    uvs.push(...faceUVs);
-                                    indices.push(ndx, ndx + 1, ndx + 2, ndx + 2, ndx + 1, ndx + 3);
-                                    const matIndex = getMaterialIndex(texture);
-                                    if (geometry.groups.length === 0 || geometry.groups[geometry.groups.length - 1].materialIndex !== matIndex) {
-                                        geometry.addGroup(indices.length - 6, 6, matIndex);
-                                    } else {
-                                        geometry.groups[geometry.groups.length - 1].count += 6;
-                                    }
-                                }
-                            }
-                        }
-                    }
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+            for (let lz = -1; lz <= regionDepth; lz++) {
+                const row = y * paddedWidth * paddedDepth + (lz + 1) * paddedWidth;
+                for (let lx = -1; lx <= regionWidth; lx++) {
+                    voxels[row + (lx + 1)] = this.world.getVoxel(originX + lx, y, originZ + lz);
                 }
             }
         }
-        
-        if (positions.length === 0) {
-            if (this.mesh) this.world.scene.remove(this.mesh);
-            this.mesh = null; return;
+
+        const meshData = generate_region_mesh(
+            voxels, regionWidth, WORLD_HEIGHT, regionDepth,
+            originX, originZ,
+            isTransparentTable, topMaterialTable, bottomMaterialTable, sideMaterialTable
+        );
+
+        if (meshData.indices.length === 0) {
+            if (this.mesh) { this.world.scene.remove(this.mesh); this.mesh.geometry.dispose(); }
+            this.mesh = null;
+            this.needsUpdate = false;
+            return;
         }
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-        geometry.setIndex(indices);
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.positions, 3));
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.normals, 3));
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(meshData.uvs, 2));
+        geometry.setIndex(new THREE.Uint32BufferAttribute(meshData.indices, 1));
+
+        const groups = meshData.groups;
+        for (let i = 0; i < groups.length; i += 3) {
+            geometry.addGroup(groups[i], groups[i + 1], groups[i + 2]);
+        }
         geometry.computeBoundingSphere();
-        if(this.mesh) {
-            // Материалы теперь кэшируются на уровне модуля и переиспользуются
-            // другими регионами, поэтому их нельзя dispose() здесь — только геометрию.
+
+        if (this.mesh) {
+            // Материалы общие для всех регионов и переиспользуются между
+            // перестроениями, поэтому их нельзя dispose() здесь — только геометрию.
             this.world.scene.remove(this.mesh);
             this.mesh.geometry.dispose();
         }
-        this.mesh = new THREE.Mesh(geometry, materials);
+        this.mesh = new THREE.Mesh(geometry, globalMaterials);
         this.world.scene.add(this.mesh);
         this.needsUpdate = false;
     }
@@ -175,13 +180,13 @@ export class World {
         this.chunks = {};
         this.regions = {};
         this.seed = seed || Math.random() * 10000;
-        
+
         // --- УДАЛЕНО: `noise.seed(this.seed);` ---
 
         // --- ДОБАВЛЕНО: Создаем экземпляр GPU-генератора ---
         this.gpuGenerator = new GPUWorldGenerator(renderer, this.seed);
     }
-    
+
     getChunkKey(x, z) { return `${x},${z}`; }
     getRegionKey(rx, rz) { return `${rx},${rz}`; }
 
@@ -249,10 +254,10 @@ export class World {
 
         const chunk = new Chunk(chunkX, chunkZ);
         this.chunks[key] = chunk;
-        
+
         // 1. Получаем карту высот для этого чанка от GPU
         const heightMap = this.gpuGenerator.generateHeightMap(chunkX, chunkZ);
-        
+
         // 2. Заполняем чанк данными на основе полученной карты высот
         for (let x = 0; x < CHUNK_SIZE; x++) {
             for (let z = 0; z < CHUNK_SIZE; z++) {
@@ -279,7 +284,7 @@ export class World {
         }
         return chunk;
     }
-    
+
     update() {
         for (const key in this.regions) {
             if (this.regions[key].needsUpdate) {
@@ -305,7 +310,7 @@ export class World {
         // Важно сначала уничтожить старый, чтобы освободить ресурсы GPU
         if (this.gpuGenerator) this.gpuGenerator.dispose();
         this.gpuGenerator = new GPUWorldGenerator(renderer, this.seed);
-        
+
         this.chunks = {};
         this.regions = {};
 
@@ -314,7 +319,7 @@ export class World {
             const chunk = new Chunk(x, z);
             chunk.data = new Uint8Array(data.chunks[key]);
             this.chunks[key] = chunk;
-            
+
             const regionX = Math.floor(x / REGION_SIZE);
             const regionZ = Math.floor(z / REGION_SIZE);
             const regionKey = this.getRegionKey(regionX, regionZ);

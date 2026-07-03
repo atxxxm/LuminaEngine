@@ -1,0 +1,15 @@
+{
+  "name": "lumina-meshing",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "lumina_meshing_bg.wasm",
+    "lumina_meshing.js",
+    "lumina_meshing.d.ts"
+  ],
+  "main": "lumina_meshing.js",
+  "types": "lumina_meshing.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
