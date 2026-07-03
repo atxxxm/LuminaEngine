@@ -21,7 +21,8 @@ function main() {
     const newWorldBtn = document.getElementById('new-world-btn');
     const loadWorldBtn = document.getElementById('load-world-btn');
 
-    loadWorldBtn.disabled = !saveManager.hasSavedWorld();
+    loadWorldBtn.disabled = true;
+    saveManager.hasSavedWorld().then(has => { loadWorldBtn.disabled = !has; });
 
     // Меню стартует игру ровно один раз за загрузку страницы — "назад в
     // меню" тут нет. Без этой защиты повторный клик (например, двойной
@@ -36,9 +37,9 @@ function main() {
         startGame(null);
     });
 
-    loadWorldBtn.addEventListener('click', () => {
+    loadWorldBtn.addEventListener('click', async () => {
         if (gameStarted) return;
-        const saveData = saveManager.loadWorld();
+        const saveData = await saveManager.loadWorld();
         if (saveData) {
             startGame(saveData);
         } else {
