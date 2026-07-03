@@ -11,6 +11,30 @@ const CHUNK_SIZE = 8; // Стандартный размер чанка
 const WORLD_HEIGHT = 128;
 const REGION_SIZE = 4; // 4x4 чанка в одном меше (64x64 блока)
 
+// Текстуры и материалы одинаковы для всех регионов и не меняются между
+// перестроениями меша, поэтому кэшируем их на уровне модуля, а не создаём
+// заново при каждом вызове generateMesh().
+const textureLoader = new THREE.TextureLoader();
+const textureCache = {};
+const materialCache = {};
+
+function getMaterial(textureName) {
+    if (!materialCache[textureName]) {
+        if (!textureCache[textureName]) {
+            textureCache[textureName] = textureLoader.load(`textures/${textureName}`);
+            textureCache[textureName].magFilter = THREE.NearestFilter;
+            textureCache[textureName].minFilter = THREE.NearestFilter;
+        }
+        const isTransparent = textureName.includes('leaves');
+        materialCache[textureName] = new THREE.MeshLambertMaterial({
+            map: textureCache[textureName],
+            transparent: isTransparent,
+            alphaTest: isTransparent ? 0.5 : 0
+        });
+    }
+    return materialCache[textureName];
+}
+
 // Класс для хранения данных о блоках. Больше не занимается рендерингом.
 class Chunk {
     constructor(x, z) {
@@ -51,26 +75,14 @@ class WorldRegion {
         const indices = [];
         
         const geometry = new THREE.BufferGeometry();
-        
-        const textureLoader = new THREE.TextureLoader();
-        const textures = {};
+
         const materials = [];
         const materialMap = {};
         let materialIndex = 0;
 
         function getMaterialIndex(textureName) {
             if (materialMap[textureName] === undefined) {
-                if (!textures[textureName]) {
-                    textures[textureName] = textureLoader.load(`textures/${textureName}`);
-                    textures[textureName].magFilter = THREE.NearestFilter;
-                    textures[textureName].minFilter = THREE.NearestFilter;
-                }
-                const isTransparent = textureName.includes('leaves');
-                materials.push(new THREE.MeshLambertMaterial({
-                    map: textures[textureName],
-                    transparent: isTransparent,
-                    alphaTest: isTransparent ? 0.5 : 0
-                }));
+                materials.push(getMaterial(textureName));
                 materialMap[textureName] = materialIndex++;
             }
             return materialMap[textureName];
@@ -144,9 +156,10 @@ class WorldRegion {
         geometry.setIndex(indices);
         geometry.computeBoundingSphere();
         if(this.mesh) {
-            this.world.scene.remove(this.mesh); this.mesh.geometry.dispose();
-            if (Array.isArray(this.mesh.material)) { this.mesh.material.forEach(m => m.dispose());
-            } else if (this.mesh.material) { this.mesh.material.dispose(); }
+            // Материалы теперь кэшируются на уровне модуля и переиспользуются
+            // другими регионами, поэтому их нельзя dispose() здесь — только геометрию.
+            this.world.scene.remove(this.mesh);
+            this.mesh.geometry.dispose();
         }
         this.mesh = new THREE.Mesh(geometry, materials);
         this.world.scene.add(this.mesh);
