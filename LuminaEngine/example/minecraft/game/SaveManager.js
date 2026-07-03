@@ -1,4 +1,6 @@
 // game/SaveManager.js
+import { Inventory } from './Inventory.js';
+
 export class SaveManager {
     constructor() {
         this.saveKey = 'luminaCraftWorld';
@@ -12,7 +14,7 @@ export class SaveManager {
         const playerData = {
             position: player.transform.position.toArray(),
             rotation: player.transform.rotation.toArray(),
-            inventory: player.getComponent('Inventory').getData()
+            inventory: player.getComponent(Inventory).getData()
         };
         const worldData = world.getData();
         
