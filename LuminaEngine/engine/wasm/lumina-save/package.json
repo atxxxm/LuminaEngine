@@ -1,0 +1,15 @@
+{
+  "name": "lumina-save",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "lumina_save_bg.wasm",
+    "lumina_save.js",
+    "lumina_save.d.ts"
+  ],
+  "main": "lumina_save.js",
+  "types": "lumina_save.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

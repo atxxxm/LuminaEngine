@@ -6,8 +6,10 @@ import { BLOCK } from './blocks.js';
 import initMeshing, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
 // --- ДОБАВЛЕНО: Rust/WASM генератор карты высот (раньше — синхронный GPU readback) ---
 import initWorldgen, { generate_height_map } from '../../../engine/wasm/lumina-worldgen/lumina_worldgen.js';
+// --- ДОБАВЛЕНО: Rust/WASM RLE-сжатие данных чанков для сохранения мира ---
+import initSave, { encode_chunk, decode_chunk } from '../../../engine/wasm/lumina-save/lumina_save.js';
 
-await Promise.all([initMeshing(), initWorldgen()]);
+await Promise.all([initMeshing(), initWorldgen(), initSave()]);
 
 const CHUNK_SIZE = 8; // Стандартный размер чанка
 const WORLD_HEIGHT = 128;
@@ -288,7 +290,10 @@ export class World {
     getData() {
         const data = {};
         for(const key in this.chunks) {
-            data[key] = Array.from(this.chunks[key].data);
+            // RLE-сжатие (Rust/WASM): чанк почти всегда состоит из длинных
+            // одинаковых пробегов (слои воздуха/камня), поэтому сжатый
+            // массив обычно в десятки-сотни раз короче исходных 8192 байт.
+            data[key] = Array.from(encode_chunk(this.chunks[key].data));
         }
         return { seed: this.seed, chunks: data };
     }
@@ -298,10 +303,11 @@ export class World {
         this.chunks = {};
         this.regions = {};
 
+        const chunkVoxelCount = CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE;
         for(const key in data.chunks) {
             const [x, z] = key.split(',').map(Number);
             const chunk = new Chunk(x, z);
-            chunk.data = new Uint8Array(data.chunks[key]);
+            chunk.data = decode_chunk(new Uint8Array(data.chunks[key]), chunkVoxelCount);
             this.chunks[key] = chunk;
 
             const regionX = Math.floor(x / REGION_SIZE);
