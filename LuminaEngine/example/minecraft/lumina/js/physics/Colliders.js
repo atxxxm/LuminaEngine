@@ -83,12 +83,3 @@ export class HeightfieldCollider extends Collider {
         return interpolatedHeight + this.gameObject.transform.position.y;
     }
 }
-
-export class MeshCollider extends Collider {
-    constructor(gameObject, geometry) {
-        super(gameObject);
-        this.type = 'mesh';
-        this.geometry = geometry;
-        console.warn('MeshCollider is not implemented yet. It will not have any physics.');
-    }
-}
