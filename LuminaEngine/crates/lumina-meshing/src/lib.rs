@@ -79,6 +79,7 @@ impl Builder {
         h: f32,
         back: bool,
         material: u32,
+        swap_uv: bool,
     ) {
         let base = (self.positions.len() / 3) as u32;
         for p in [p0, p1, p2, p3] {
@@ -87,7 +88,17 @@ impl Builder {
         }
         // UV растягивается на w x h блоков — материал должен использовать
         // RepeatWrapping, иначе текстура просто растянется на весь квад.
-        self.uvs.extend_from_slice(&[0.0, 0.0, w, 0.0, w, h, 0.0, h]);
+        //
+        // swap_uv: для граней вдоль оси X наш "u"-параметр (ширина w) — это
+        // мировая вертикаль (Y), а текстурная U-ось по умолчанию должна
+        // соответствовать горизонтали изображения. Без свопа вертикаль
+        // блока попадала бы в U вместо V, и направленные текстуры (кора
+        // бревна) выглядели бы повёрнутыми на 90°.
+        if swap_uv {
+            self.uvs.extend_from_slice(&[0.0, 0.0, 0.0, w, h, w, h, 0.0]);
+        } else {
+            self.uvs.extend_from_slice(&[0.0, 0.0, w, 0.0, w, h, 0.0, h]);
+        }
 
         let tri: [u32; 6] = if !back {
             [base, base + 1, base + 2, base, base + 2, base + 3]
@@ -290,7 +301,7 @@ fn merge_and_emit(
             let mut normal = [0f32; 3];
             normal[d] = if back { -1.0 } else { 1.0 };
 
-            b.push_quad(p0, p1, p2, p3, normal, w as f32, h as f32, back, material - 1);
+            b.push_quad(p0, p1, p2, p3, normal, w as f32, h as f32, back, material - 1, d == 0);
 
             for l in 0..h {
                 for k in 0..w {
