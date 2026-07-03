@@ -96,7 +96,7 @@ export class BlockInteraction extends Component {
     
     // Новая функция для обновления регионов
     updateSurroundingRegions(worldX, worldZ) {
-        const CHUNK_SIZE = 16; // Должно совпадать с World.js
+        const CHUNK_SIZE = 8; // Должно совпадать с World.js
         const REGION_SIZE = 4;  // Должно совпадать с World.js
         const REGION_WIDTH_IN_BLOCKS = REGION_SIZE * CHUNK_SIZE;
 
