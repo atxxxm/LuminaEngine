@@ -6,6 +6,7 @@ export class InputManager {
         this.lastKeys = {}; // Состояние клавиш на предыдущем кадре
         this.mouseDelta = { x: 0, y: 0 };
         this.lockElement = targetElement;
+        this.boundOnMouseMove = this.onMouseMove.bind(this);
 
         document.addEventListener('keydown', this.onKeyDown.bind(this));
         document.addEventListener('keyup', (e) => this.keys[e.code] = false);
@@ -17,12 +18,12 @@ export class InputManager {
         document.addEventListener('pointerlockchange', () => {
             const instructions = document.getElementById('instructions');
             if (document.pointerLockElement === this.lockElement) {
-                document.addEventListener('mousemove', this.onMouseMove.bind(this), false);
+                document.addEventListener('mousemove', this.boundOnMouseMove, false);
                 if (instructions) instructions.style.display = 'none';
             } else {
-                document.removeEventListener('mousemove', this.onMouseMove.bind(this), false);
+                document.removeEventListener('mousemove', this.boundOnMouseMove, false);
                 if (instructions) instructions.style.display = 'block';
-                this.keys = {}; 
+                this.keys = {};
             }
         });
     }
