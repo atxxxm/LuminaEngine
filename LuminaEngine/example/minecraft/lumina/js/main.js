@@ -23,11 +23,21 @@ function main() {
 
     loadWorldBtn.disabled = !saveManager.hasSavedWorld();
 
+    // Меню стартует игру ровно один раз за загрузку страницы — "назад в
+    // меню" тут нет. Без этой защиты повторный клик (например, двойной
+    // клик или гонка между обработчиками) вызвал бы startGame() ещё раз
+    // поверх уже бегущего engine: appendGameObject добавил бы второй набор
+    // RigidBody/Inventory/keydown-слушателей, а engine.start() запустил бы
+    // вторую параллельную цепочку requestAnimationFrame рядом с первой.
+    let gameStarted = false;
+
     newWorldBtn.addEventListener('click', () => {
+        if (gameStarted) return;
         startGame(null);
     });
 
     loadWorldBtn.addEventListener('click', () => {
+        if (gameStarted) return;
         const saveData = saveManager.loadWorld();
         if (saveData) {
             startGame(saveData);
@@ -37,6 +47,7 @@ function main() {
     });
 
     function startGame(saveData) {
+        gameStarted = true;
         startMenu.style.display = 'none';
 
         const world = new World(engine.renderer.scene);
