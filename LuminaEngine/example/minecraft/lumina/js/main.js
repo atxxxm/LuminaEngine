@@ -39,17 +39,11 @@ function main() {
     function startGame(saveData) {
         startMenu.style.display = 'none';
 
-        // --- ИЗМЕНЕНИЕ: Передаем renderer в конструктор World ---
-        // Наш новый GPUWorldGenerator требует прямого доступа к экземпляру
-        // THREE.WebGLRenderer для выполнения закадрового рендеринга.
-        const world = new World(engine.renderer.scene, undefined, engine.renderer.renderer);
+        const world = new World(engine.renderer.scene);
         engine.physicsEngine.setWorld(world);
 
         if (saveData) {
-            // --- ИЗМЕНЕНИЕ: Передаем renderer также и в loadData ---
-            // Это нужно, чтобы при загрузке мира GPUWorldGenerator был
-            // пересоздан с правильным seed'ом.
-            world.loadData(saveData.world, engine.renderer.renderer);
+            world.loadData(saveData.world);
         } else {
             world.generate();
         }

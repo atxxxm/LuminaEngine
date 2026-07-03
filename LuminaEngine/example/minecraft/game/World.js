@@ -1,15 +1,13 @@
 // game/World.js
 
 import * as THREE from 'three';
-// --- УДАЛЕНО: `import { noise } from '../lib/perlin.js';` ---
-// Генерация шума теперь происходит на GPU, эта библиотека больше не нужна.
 import { BLOCK } from './blocks.js';
-// --- ДОБАВЛЕНО: Импорт нашего GPU-генератора ---
-import { GPUWorldGenerator } from './GPUWorldGenerator.js';
 // --- ДОБАВЛЕНО: Rust/WASM greedy-мешер вокселей ---
-import init, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
+import initMeshing, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
+// --- ДОБАВЛЕНО: Rust/WASM генератор карты высот (раньше — синхронный GPU readback) ---
+import initWorldgen, { generate_height_map } from '../../../engine/wasm/lumina-worldgen/lumina_worldgen.js';
 
-await init();
+await Promise.all([initMeshing(), initWorldgen()]);
 
 const CHUNK_SIZE = 8; // Стандартный размер чанка
 const WORLD_HEIGHT = 128;
@@ -174,17 +172,11 @@ class WorldRegion {
 
 
 export class World {
-    // --- ИЗМЕНЕНИЕ: Конструктор теперь принимает renderer ---
-    constructor(scene, seed, renderer) {
+    constructor(scene, seed) {
         this.scene = scene;
         this.chunks = {};
         this.regions = {};
         this.seed = seed || Math.random() * 10000;
-
-        // --- УДАЛЕНО: `noise.seed(this.seed);` ---
-
-        // --- ДОБАВЛЕНО: Создаем экземпляр GPU-генератора ---
-        this.gpuGenerator = new GPUWorldGenerator(renderer, this.seed);
     }
 
     getChunkKey(x, z) { return `${x},${z}`; }
@@ -255,8 +247,8 @@ export class World {
         const chunk = new Chunk(chunkX, chunkZ);
         this.chunks[key] = chunk;
 
-        // 1. Получаем карту высот для этого чанка от GPU
-        const heightMap = this.gpuGenerator.generateHeightMap(chunkX, chunkZ);
+        // 1. Получаем карту высот для этого чанка (Rust/WASM, CPU)
+        const heightMap = generate_height_map(chunkX, chunkZ, CHUNK_SIZE, this.seed);
 
         // 2. Заполняем чанк данными на основе полученной карты высот
         for (let x = 0; x < CHUNK_SIZE; x++) {
@@ -301,16 +293,8 @@ export class World {
         return { seed: this.seed, chunks: data };
     }
 
-    // --- ИЗМЕНЕНИЕ: Метод загрузки теперь тоже принимает renderer ---
-    loadData(data, renderer) {
+    loadData(data) {
         this.seed = data.seed;
-        // --- УДАЛЕНО: `noise.seed(this.seed);` ---
-
-        // --- ДОБАВЛЕНО: Пересоздаем GPU-генератор с новым seed'ом ---
-        // Важно сначала уничтожить старый, чтобы освободить ресурсы GPU
-        if (this.gpuGenerator) this.gpuGenerator.dispose();
-        this.gpuGenerator = new GPUWorldGenerator(renderer, this.seed);
-
         this.chunks = {};
         this.regions = {};
 

@@ -5,7 +5,7 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder",
-    "build:wasm": "wasm-pack build crates/lumina-meshing --target web --out-dir ../../engine/wasm/lumina-meshing --release",
+    "build:wasm": "wasm-pack build crates/lumina-meshing --target web --out-dir ../../engine/wasm/lumina-meshing --release && wasm-pack build crates/lumina-worldgen --target web --out-dir ../../engine/wasm/lumina-worldgen --release",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

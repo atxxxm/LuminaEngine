@@ -1,0 +1,15 @@
+{
+  "name": "lumina-worldgen",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "lumina_worldgen_bg.wasm",
+    "lumina_worldgen.js",
+    "lumina_worldgen.d.ts"
+  ],
+  "main": "lumina_worldgen.js",
+  "types": "lumina_worldgen.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

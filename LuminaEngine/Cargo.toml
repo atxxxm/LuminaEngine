@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lumina-meshing"]
+members = ["crates/lumina-meshing", "crates/lumina-worldgen"]
 
 [profile.release]
 opt-level = 3
