@@ -12,6 +12,8 @@
         #hotbar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; background: rgba(0,0,0,0.4); border: 2px solid #555; }
         .hotbar-slot { width: 50px; height: 50px; border: 2px solid #888; margin: 2px; background-size: cover; background-position: center; image-rendering: pixelated; position: relative; }
         .hotbar-slot.selected { border-color: white; transform: scale(1.1); }
+        .hotbar-slot.held { border-color: #ffcc00; box-shadow: 0 0 6px #ffcc00; }
+        #inventory .hotbar-slot { cursor: pointer; pointer-events: all; }
         .item-count { position: absolute; bottom: 2px; right: 2px; font-size: 14px; text-shadow: 1px 1px 2px black; }
         #inventory { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 462px; background: rgba(10,10,10,0.8); border: 3px solid #555; padding: 10px; display: none; pointer-events: all; }
         .inventory-grid { display: grid; grid-template-columns: repeat(9, 50px); gap: 2px; }
