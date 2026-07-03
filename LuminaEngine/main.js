@@ -15,7 +15,7 @@ function createWindow() {
     });
 
     // и загружаем index.html нашего приложения.
-    win.loadFile('example/3dGame/game.html');
+    win.loadFile('example/minecraft/index.html');
 
     // Убираем стандартное меню (Файл, Правка и т.д.) для более игрового вида
     win.setMenuBarVisibility(false);
