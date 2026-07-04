@@ -2,11 +2,10 @@
 
 import * as THREE from 'three';
 import { BLOCK } from './blocks.js';
-// --- ДОБАВЛЕНО: Rust/WASM greedy-мешер вокселей ---
+// WASM-модули нужны и главному потоку: для синхронного фолбэка генерации/
+// мешинга (если воркер не поднимется) и для сжатия сохранений.
 import initMeshing, { generate_region_mesh } from '../../../engine/wasm/lumina-meshing/lumina_meshing.js';
-// --- ДОБАВЛЕНО: Rust/WASM генератор карты высот (раньше — синхронный GPU readback) ---
 import initWorldgen, { generate_chunk_voxels } from '../../../engine/wasm/lumina-worldgen/lumina_worldgen.js';
-// --- ДОБАВЛЕНО: Rust/WASM RLE-сжатие данных чанков для сохранения мира ---
 import initSave, { encode_chunk, decode_chunk } from '../../../engine/wasm/lumina-save/lumina_save.js';
 
 await Promise.all([initMeshing(), initWorldgen(), initSave()]);
@@ -16,17 +15,16 @@ const WORLD_HEIGHT = 128;
 const REGION_SIZE = 4; // 4x4 чанка в одном меше (64x64 блока)
 const REGION_BLOCK_SIZE = REGION_SIZE * CHUNK_SIZE;
 
-// Дальность прорисовки в регионах вокруг игрока (как render distance в
-// Minecraft, только в единицах региона, а не чанка) — регионы за этой
-// границей выгружаются (меш убирается из сцены), в неё — догружаются.
+// Дальность прорисовки в регионах вокруг игрока (render distance).
 const RENDER_DISTANCE_REGIONS = 3;
-// Не грузим все недостающие регионы за один кадр при пересечении границы —
-// размазываем по кадрам, чтобы не просело FPS.
-const REGIONS_PER_FRAME = 1;
+// Сколько регионов запускать в загрузку и сколько перестраивать за кадр —
+// само тяжёлое считается в воркере, здесь ограничиваем лишь темп постановки
+// задач и сборку геометрии на главном потоке.
+const REGIONS_PER_FRAME = 2;
+const REMESH_PER_FRAME = 2;
 
 // Текстуры и материалы одинаковы для всех регионов и не меняются между
-// перестроениями меша, поэтому кэшируем их на уровне модуля, а не создаём
-// заново при каждом вызове generateMesh().
+// перестроениями меша, поэтому кэшируем их на уровне модуля.
 const textureLoader = new THREE.TextureLoader();
 const textureCache = {};
 const materialCache = {};
@@ -54,8 +52,7 @@ function getMaterial(textureName) {
     return materialCache[textureName];
 }
 
-// Для блоков без текстуры (сейчас — вода): плоский полупрозрачный цвет
-// вместо картинки.
+// Для блоков без текстуры (вода/песок/снег): плоский цвет вместо картинки.
 function getColorMaterial(colorHex, opacity) {
     const key = `color:${colorHex}`;
     if (!materialCache[key]) {
@@ -103,11 +100,67 @@ for (const idKey of Object.keys(BLOCK.properties)) {
     } else if (props.texture) {
         idx = materialIndexForKey(props.texture, () => getMaterial(props.texture));
     } else {
-        continue; // блоки без визуала (воздух) никогда не станут "твёрдой стороной" грани
+        continue; // блоки без визуала (воздух)
     }
     topMaterialTable[id] = idx;
     bottomMaterialTable[id] = idx;
     sideMaterialTable[id] = idx;
+}
+
+// --- Бэкенды генерации/мешинга -------------------------------------------
+// Единый интерфейс: genChunk() -> Promise<Uint8Array>,
+// meshRegion() -> Promise<{positions,normals,uvs,indices,groups}>.
+
+// Синхронный фолбэк: считает прямо на главном потоке (как было раньше).
+// Работает всегда — используется, пока/если воркер недоступен.
+const localBackend = {
+    genChunk(cx, cz, seed) {
+        return Promise.resolve(generate_chunk_voxels(cx, cz, CHUNK_SIZE, WORLD_HEIGHT, seed));
+    },
+    meshRegion(voxels, rw, wh, rd, ox, oz) {
+        const md = generate_region_mesh(
+            voxels, rw, wh, rd, ox, oz,
+            isTransparentTable, topMaterialTable, bottomMaterialTable, sideMaterialTable
+        );
+        return Promise.resolve({
+            positions: md.positions, normals: md.normals, uvs: md.uvs,
+            indices: md.indices, groups: md.groups,
+        });
+    },
+    dispose() {},
+};
+
+// Фоновый воркер: те же задачи, но вне главного потока.
+class WorkerBackend {
+    constructor(worker) {
+        this.worker = worker;
+        this.nextId = 1;
+        this.pending = new Map();
+        this.worker.onmessage = (e) => {
+            const m = e.data;
+            const cb = this.pending.get(m.id);
+            if (cb) { this.pending.delete(m.id); cb(m); }
+        };
+    }
+    genChunk(cx, cz, seed) {
+        return new Promise((resolve) => {
+            const id = this.nextId++;
+            this.pending.set(id, (m) => resolve(m.data));
+            this.worker.postMessage({ type: 'genChunk', id, cx, cz, chunkSize: CHUNK_SIZE, worldHeight: WORLD_HEIGHT, seed });
+        });
+    }
+    meshRegion(voxels, rw, wh, rd, ox, oz) {
+        return new Promise((resolve) => {
+            const id = this.nextId++;
+            this.pending.set(id, (m) => resolve(m));
+            // Передаём буфер вокселей воркеру (главному потоку эта временная
+            // копия больше не нужна).
+            this.worker.postMessage({ type: 'mesh', id, voxels, rw, wh, rd, ox, oz }, [voxels.buffer]);
+        });
+    }
+    dispose() {
+        this.worker.terminate();
+    }
 }
 
 // Класс для хранения данных о блоках. Больше не занимается рендерингом.
@@ -132,72 +185,16 @@ class Chunk {
     }
 }
 
-// Новый класс для управления одним большим мешем, объединяющим несколько чанков
+// Регион — «держатель состояния» одного меша (4x4 чанка). Сама сборка
+// геометрии живёт в World (нужен доступ к сцене/бэкенду).
 class WorldRegion {
-    constructor(rx, rz, world) {
-        this.rx = rx; // Координаты региона
+    constructor(rx, rz) {
+        this.rx = rx;
         this.rz = rz;
-        this.world = world;
         this.mesh = null;
-        this.needsUpdate = false;
-    }
-
-    // Собирает воксели региона (с рамкой в 1 блок по X/Z для корректного
-    // отсечения граней на стыке с соседними регионами) в плоский буфер и
-    // передаёт его в WASM greedy-мешер вместо ручного JS-перебора.
-    generateMesh() {
-        const regionWidth = REGION_BLOCK_SIZE;
-        const regionDepth = REGION_BLOCK_SIZE;
-        const originX = this.rx * regionWidth;
-        const originZ = this.rz * regionDepth;
-
-        const paddedWidth = regionWidth + 2;
-        const paddedDepth = regionDepth + 2;
-        const voxels = new Uint8Array(paddedWidth * WORLD_HEIGHT * paddedDepth);
-
-        for (let y = 0; y < WORLD_HEIGHT; y++) {
-            for (let lz = -1; lz <= regionDepth; lz++) {
-                const row = y * paddedWidth * paddedDepth + (lz + 1) * paddedWidth;
-                for (let lx = -1; lx <= regionWidth; lx++) {
-                    voxels[row + (lx + 1)] = this.world.getVoxel(originX + lx, y, originZ + lz);
-                }
-            }
-        }
-
-        const meshData = generate_region_mesh(
-            voxels, regionWidth, WORLD_HEIGHT, regionDepth,
-            originX, originZ,
-            isTransparentTable, topMaterialTable, bottomMaterialTable, sideMaterialTable
-        );
-
-        if (meshData.indices.length === 0) {
-            if (this.mesh) { this.world.scene.remove(this.mesh); this.mesh.geometry.dispose(); }
-            this.mesh = null;
-            this.needsUpdate = false;
-            return;
-        }
-
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(meshData.positions, 3));
-        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(meshData.normals, 3));
-        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(meshData.uvs, 2));
-        geometry.setIndex(new THREE.Uint32BufferAttribute(meshData.indices, 1));
-
-        const groups = meshData.groups;
-        for (let i = 0; i < groups.length; i += 3) {
-            geometry.addGroup(groups[i], groups[i + 1], groups[i + 2]);
-        }
-        geometry.computeBoundingSphere();
-
-        if (this.mesh) {
-            // Материалы общие для всех регионов и переиспользуются между
-            // перестроениями, поэтому их нельзя dispose() здесь — только геометрию.
-            this.world.scene.remove(this.mesh);
-            this.mesh.geometry.dispose();
-        }
-        this.mesh = new THREE.Mesh(geometry, globalMaterials);
-        this.world.scene.add(this.mesh);
-        this.needsUpdate = false;
+        this.needsUpdate = false; // требуется (пере)построить меш
+        this.meshing = false;     // построение меша сейчас в полёте
+        this.disposed = false;    // регион выгружен — незавершённые задачи отбросить
     }
 }
 
@@ -207,13 +204,50 @@ export class World {
         this.scene = scene;
         this.chunks = {};
         this.regions = {};
-        // ВАЖНО: не `seed || ...` — 0 валидный сид, но falsy, из-за чего
-        // "|| Math.random()" тихо подменял бы его случайным.
+        // ВАЖНО: не `seed || ...` — 0 валидный сид, но falsy.
         this.seed = (seed !== undefined && seed !== null) ? seed : Math.random() * 10000;
 
-        // Стриминг регионов по дальности видимости от игрока.
         this.streamQueue = [];
         this.lastPlayerRegionKey = null;
+
+        this.disposed = false;
+        this.pendingChunks = {}; // key -> Promise генерации чанка (дедупликация)
+
+        // Начинаем на синхронном бэкенде (работает сразу), асинхронно
+        // пробуем поднять воркер и «повыситься» до него.
+        this.backend = localBackend;
+        this._initWorker();
+    }
+
+    async _initWorker() {
+        try {
+            const worker = new Worker(new URL('./worldWorker.js', import.meta.url), { type: 'module' });
+            const ok = await new Promise((resolve) => {
+                const timer = setTimeout(() => resolve(false), 8000);
+                worker.onmessage = (e) => {
+                    if (e.data && e.data.type === 'ready') { clearTimeout(timer); resolve(true); }
+                };
+                worker.onerror = () => { clearTimeout(timer); resolve(false); };
+                worker.postMessage({
+                    type: 'init',
+                    tables: {
+                        isTransparent: isTransparentTable,
+                        top: topMaterialTable,
+                        bottom: bottomMaterialTable,
+                        side: sideMaterialTable,
+                    },
+                });
+            });
+            if (ok && !this.disposed) {
+                this.backend = new WorkerBackend(worker);
+            } else {
+                worker.terminate();
+            }
+        } catch (e) {
+            // Воркер недоступен (например, ES-модульный воркер по file://) —
+            // остаёмся на синхронном бэкенде, всё продолжает работать.
+            console.warn('World: воркер недоступен, генерация на главном потоке.', e);
+        }
     }
 
     getChunkKey(x, z) { return `${x},${z}`; }
@@ -257,69 +291,9 @@ export class World {
         }
     }
 
-    // Генерирует воксели всех чанков региона (кэшируются, повторный вызов
-    // для уже сгенерированных чанков — no-op) и строит его меш.
-    loadRegion(rx, rz) {
-        const key = this.getRegionKey(rx, rz);
-        if (this.regions[key]) return;
-
-        const startChunkX = rx * REGION_SIZE;
-        const startChunkZ = rz * REGION_SIZE;
-        for (let cx = 0; cx < REGION_SIZE; cx++) {
-            for (let cz = 0; cz < REGION_SIZE; cz++) {
-                this.generateChunkData(startChunkX + cx, startChunkZ + cz);
-            }
-        }
-
-        const region = new WorldRegion(rx, rz, this);
-        this.regions[key] = region;
-        region.generateMesh();
-    }
-
-    // Убирает меш региона из сцены и освобождает GPU-память. Данные
-    // вокселей чанков (this.chunks) НЕ удаляются — без системы сохранений
-    // это самый простой способ не потерять сделанные игроком правки при
-    // повторном заходе в тот же регион, а память на несколько тысяч
-    // чанков (по 8 КБ каждый) в браузере не критична.
-    unloadRegion(rx, rz) {
-        const key = this.getRegionKey(rx, rz);
-        const region = this.regions[key];
-        if (!region) return;
-        if (region.mesh) {
-            this.scene.remove(region.mesh);
-            region.mesh.geometry.dispose();
-        }
-        delete this.regions[key];
-    }
-
-    // Полная выгрузка мира при выходе в меню: убирает все меши регионов
-    // из сцены и освобождает их геометрию. World не является gameObject,
-    // поэтому Engine.stop() до него не дотягивается — вызывается из main.js.
-    dispose() {
-        for (const key of Object.keys(this.regions)) {
-            const [rx, rz] = key.split(',').map(Number);
-            this.unloadRegion(rx, rz);
-        }
-        this.chunks = {};
-        this.regions = {};
-        this.streamQueue = [];
-    }
-
-    // Начальная область вокруг точки спавна — грузится сразу и
-    // синхронно, чтобы поиску точки спавна в main.js было куда встать.
-    // Дальше подгрузку/выгрузку по мере движения игрока берёт на себя
-    // updateStreaming().
-    generate() {
-        const initialRadius = 1;
-        for (let rx = -initialRadius; rx <= initialRadius; rx++) {
-            for (let rz = -initialRadius; rz <= initialRadius; rz++) {
-                this.loadRegion(rx, rz);
-            }
-        }
-    }
-
-    // Рельеф, пещеры, руды, вода и деревья считаются целиком в Rust/WASM —
-    // JS только забирает готовый буфер вокселей.
+    // Синхронная генерация данных чанка на главном потоке. Используется для
+    // мест, где данные нужны немедленно: bootstrap спавна (findSpawn читает
+    // getVoxel сразу) и постановка блока в ещё не сгенерированный чанк.
     generateChunkData(chunkX, chunkZ) {
         const key = this.getChunkKey(chunkX, chunkZ);
         if (this.chunks[key]) return this.chunks[key];
@@ -330,8 +304,174 @@ export class World {
         return chunk;
     }
 
-    // Подгружает регионы в радиусе видимости вокруг игрока и выгружает
-    // те, что вышли за его пределы — аналог render distance в Minecraft.
+    // Гарантирует наличие данных всех чанков региона + рамки в 1 чанк вокруг
+    // (для корректного отсечения граней на стыках). Генерация — через бэкенд
+    // (воркер, если доступен). Дедупликация через pendingChunks.
+    async ensureRegionChunks(rx, rz) {
+        const promises = [];
+        const startCx = rx * REGION_SIZE - 1;
+        const endCx = rx * REGION_SIZE + REGION_SIZE;
+        const startCz = rz * REGION_SIZE - 1;
+        const endCz = rz * REGION_SIZE + REGION_SIZE;
+        for (let cx = startCx; cx <= endCx; cx++) {
+            for (let cz = startCz; cz <= endCz; cz++) {
+                const key = this.getChunkKey(cx, cz);
+                if (this.chunks[key]) continue;
+                if (!this.pendingChunks[key]) {
+                    this.pendingChunks[key] = this.backend.genChunk(cx, cz, this.seed).then((data) => {
+                        if (!this.chunks[key]) {
+                            const c = new Chunk(cx, cz);
+                            c.data = data;
+                            this.chunks[key] = c;
+                        }
+                        delete this.pendingChunks[key];
+                    });
+                }
+                promises.push(this.pendingChunks[key]);
+            }
+        }
+        if (promises.length) await Promise.all(promises);
+    }
+
+    // Собирает воксели региона с рамкой в 1 блок в плоский буфер (свежий —
+    // потом он передаётся воркеру как transferable).
+    buildPaddedBuffer(ox, oz, rw, rd) {
+        const pw = rw + 2;
+        const pd = rd + 2;
+        const voxels = new Uint8Array(pw * WORLD_HEIGHT * pd);
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+            for (let lz = -1; lz <= rd; lz++) {
+                const row = y * pw * pd + (lz + 1) * pw;
+                for (let lx = -1; lx <= rw; lx++) {
+                    voxels[row + (lx + 1)] = this.getVoxel(ox + lx, y, oz + lz);
+                }
+            }
+        }
+        return voxels;
+    }
+
+    // Асинхронно строит/перестраивает меш региона через бэкенд.
+    async remeshRegion(region) {
+        if (region.disposed || region.meshing) return;
+        region.needsUpdate = false;
+        region.meshing = true;
+
+        const ox = region.rx * REGION_BLOCK_SIZE;
+        const oz = region.rz * REGION_BLOCK_SIZE;
+        const voxels = this.buildPaddedBuffer(ox, oz, REGION_BLOCK_SIZE, REGION_BLOCK_SIZE);
+
+        let md;
+        try {
+            md = await this.backend.meshRegion(voxels, REGION_BLOCK_SIZE, WORLD_HEIGHT, REGION_BLOCK_SIZE, ox, oz);
+        } finally {
+            region.meshing = false;
+        }
+
+        if (region.disposed) return; // регион выгрузили, пока строился меш
+        this.applyMesh(region, md);
+
+        // Блок могли изменить, пока строился меш — построим ещё раз.
+        if (region.needsUpdate) this.remeshRegion(region);
+    }
+
+    applyMesh(region, md) {
+        if (md.indices.length === 0) {
+            if (region.mesh) { this.scene.remove(region.mesh); region.mesh.geometry.dispose(); }
+            region.mesh = null;
+            return;
+        }
+
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(md.positions, 3));
+        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(md.normals, 3));
+        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(md.uvs, 2));
+        geometry.setIndex(new THREE.Uint32BufferAttribute(md.indices, 1));
+
+        const groups = md.groups;
+        for (let i = 0; i < groups.length; i += 3) {
+            geometry.addGroup(groups[i], groups[i + 1], groups[i + 2]);
+        }
+        geometry.computeBoundingSphere();
+
+        if (region.mesh) {
+            // Материалы общие и переиспользуются — dispose только геометрии.
+            this.scene.remove(region.mesh);
+            region.mesh.geometry.dispose();
+        }
+        region.mesh = new THREE.Mesh(geometry, globalMaterials);
+        this.scene.add(region.mesh);
+    }
+
+    // Асинхронная загрузка региона: генерируем его чанки (+рамку) через
+    // бэкенд, затем строим меш. Соседние уже загруженные регионы помечаем на
+    // перестроение — их граница могла измениться от новых чанков.
+    async loadRegion(rx, rz) {
+        const key = this.getRegionKey(rx, rz);
+        if (this.regions[key]) return;
+
+        const region = new WorldRegion(rx, rz);
+        this.regions[key] = region;
+
+        await this.ensureRegionChunks(rx, rz);
+        if (region.disposed || this.disposed) return;
+
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const n = this.getRegion(rx + dx, rz + dz);
+            if (n && n.mesh) n.needsUpdate = true;
+        }
+
+        await this.remeshRegion(region);
+    }
+
+    unloadRegion(rx, rz) {
+        const key = this.getRegionKey(rx, rz);
+        const region = this.regions[key];
+        if (!region) return;
+        region.disposed = true; // незавершённые gen/mesh отбросят результат
+        if (region.mesh) {
+            this.scene.remove(region.mesh);
+            region.mesh.geometry.dispose();
+            region.mesh = null;
+        }
+        delete this.regions[key];
+    }
+
+    // Полная выгрузка мира при выходе в меню.
+    dispose() {
+        this.disposed = true;
+        for (const key of Object.keys(this.regions)) {
+            const [rx, rz] = key.split(',').map(Number);
+            this.unloadRegion(rx, rz);
+        }
+        this.chunks = {};
+        this.regions = {};
+        this.streamQueue = [];
+        this.pendingChunks = {};
+        this.backend.dispose();
+    }
+
+    // Область спавна: данные чанков генерируем СИНХРОННО (findSpawn в main.js
+    // читает getVoxel сразу после generate()), а меши строятся асинхронно
+    // через dirty-цикл в update(). Синхронно генерируем и рамку, чтобы
+    // границы спавн-регионов сразу были корректны.
+    generate() {
+        const r = 1;
+        const startC = -r * REGION_SIZE - 1;
+        const endC = (r + 1) * REGION_SIZE;
+        for (let cx = startC; cx <= endC; cx++) {
+            for (let cz = startC; cz <= endC; cz++) {
+                this.generateChunkData(cx, cz);
+            }
+        }
+        for (let rx = -r; rx <= r; rx++) {
+            for (let rz = -r; rz <= r; rz++) {
+                const region = new WorldRegion(rx, rz);
+                region.needsUpdate = true;
+                this.regions[this.getRegionKey(rx, rz)] = region;
+            }
+        }
+    }
+
     updateStreaming(playerPosition) {
         if (!playerPosition) return;
 
@@ -355,30 +495,30 @@ export class World {
                 }
             }
 
-            // Выгрузка дешёвая (просто убрать меш из сцены) — делаем сразу,
-            // без размазывания по кадрам.
             for (const key of Object.keys(this.regions)) {
                 if (!desired.has(key)) {
                     const [rx, rz] = key.split(',').map(Number);
                     this.unloadRegion(rx, rz);
                 }
             }
-            // Игрок мог быстро проскочить регион, не дождавшись его
-            // загрузки — убираем из очереди то, что уже вышло за пределы
-            // дальности прорисовки.
             this.streamQueue = this.streamQueue.filter(r => desired.has(this.getRegionKey(r.rx, r.rz)));
         }
 
         for (let i = 0; i < REGIONS_PER_FRAME && this.streamQueue.length > 0; i++) {
             const { rx, rz } = this.streamQueue.shift();
-            this.loadRegion(rx, rz);
+            this.loadRegion(rx, rz).catch((e) => console.error('loadRegion:', e));
         }
     }
 
     update(deltaTime, playerPosition) {
+        // Перестройка «грязных» регионов, с ограничением на кадр.
+        let remeshed = 0;
         for (const key in this.regions) {
-            if (this.regions[key].needsUpdate) {
-                this.regions[key].generateMesh();
+            if (remeshed >= REMESH_PER_FRAME) break;
+            const region = this.regions[key];
+            if (region.needsUpdate && !region.meshing && !region.disposed) {
+                this.remeshRegion(region).catch((e) => console.error('remeshRegion:', e));
+                remeshed++;
             }
         }
         this.updateStreaming(playerPosition);
@@ -386,10 +526,7 @@ export class World {
 
     getData() {
         const data = {};
-        for(const key in this.chunks) {
-            // RLE-сжатие (Rust/WASM): чанк почти всегда состоит из длинных
-            // одинаковых пробегов (слои воздуха/камня), поэтому сжатый
-            // массив обычно в десятки-сотни раз короче исходных 8192 байт.
+        for (const key in this.chunks) {
             data[key] = Array.from(encode_chunk(this.chunks[key].data));
         }
         return { seed: this.seed, chunks: data };
@@ -401,7 +538,7 @@ export class World {
         this.regions = {};
 
         const chunkVoxelCount = CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE;
-        for(const key in data.chunks) {
+        for (const key in data.chunks) {
             const [x, z] = key.split(',').map(Number);
             const chunk = new Chunk(x, z);
             chunk.data = decode_chunk(new Uint8Array(data.chunks[key]), chunkVoxelCount);
@@ -411,10 +548,10 @@ export class World {
             const regionZ = Math.floor(z / REGION_SIZE);
             const regionKey = this.getRegionKey(regionX, regionZ);
             if (!this.regions[regionKey]) {
-                 this.regions[regionKey] = new WorldRegion(regionX, regionZ, this);
-                 this.regions[regionKey].needsUpdate = true;
+                const region = new WorldRegion(regionX, regionZ);
+                region.needsUpdate = true;
+                this.regions[regionKey] = region;
             }
         }
-        this.update();
     }
 }
