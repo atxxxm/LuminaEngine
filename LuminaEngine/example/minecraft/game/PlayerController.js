@@ -29,6 +29,10 @@ export class PlayerController extends Component {
         this.isCrouching = false;
         this.standHeight = 0.8;
         this.crouchHeight = 0.6;
+        // Лерпнутая высота камеры (присед) без учёта rigidBody.stepVisualOffset —
+        // тот добавляется поверх при записи в camera.position.y, а не мешается
+        // с этим значением, иначе шаг и присед "боролись" бы за одну переменную.
+        this.cameraHeight = this.standHeight;
     }
 
     start() {
@@ -103,9 +107,12 @@ export class PlayerController extends Component {
         this.rigidBody.velocity.x = moveDirection.x * currentSpeed;
         this.rigidBody.velocity.z = moveDirection.z * currentSpeed;
 
-        // Crouching height adjust
+        // Crouching height adjust + плавная поправка от авто-шага (см.
+        // PhysicsEngine.tryStepUp / RigidBody.stepVisualOffset) — без неё
+        // подъём на ступеньку выглядел бы мгновенным телепортом камеры.
         const targetHeight = this.isCrouching ? this.crouchHeight : this.standHeight;
-        this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetHeight, deltaTime * 10);
+        this.cameraHeight = THREE.MathUtils.lerp(this.cameraHeight, targetHeight, deltaTime * 10);
+        this.camera.position.y = this.cameraHeight + this.rigidBody.stepVisualOffset;
 
         if (inWater) {
             // В воде Space — выгребать вверх, Ctrl — вниз; иначе плавучесть

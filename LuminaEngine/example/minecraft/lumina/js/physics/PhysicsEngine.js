@@ -68,6 +68,15 @@ export class PhysicsEngine {
             }
 
             this.moveAndCollide(body, half, dt);
+
+            // Плавно гасим визуальный "довесок" от авто-шага (см. tryStepUp) —
+            // сама позиция тела уже мгновенно на новой высоте (нужно для
+            // корректных коллизий), а это только для камеры, чтобы шаг не
+            // выглядел телепортом. Множитель не зависит от FPS.
+            if (body.stepVisualOffset !== 0) {
+                body.stepVisualOffset *= Math.pow(0.0001, dt);
+                if (Math.abs(body.stepVisualOffset) < 0.001) body.stepVisualOffset = 0;
+            }
         }
     }
 
@@ -151,6 +160,11 @@ export class PhysicsEngine {
     // Тело есть на земле, но его горизонтально заблокировало. Пробуем поднять
     // на STEP_HEIGHT к желаемой горизонтальной позиции — если там свободно,
     // «залезаем» на ступеньку (иначе откатываемся к заблокированной точке).
+    // Физическая позиция сдвигается мгновенно (нужно для корректных
+    // коллизий/raycast), но чтобы это не выглядело телепортом на экране,
+    // копим отрицательный визуальный "довесок" — камера (см.
+    // PlayerController) рисуется на body.stepVisualOffset ниже реальной
+    // позиции и он сам плавно гасится к нулю в update().
     tryStepUp(body, half, targetX, targetZ) {
         const pos = body.transform.position;
         const blockedX = pos.x, blockedY = pos.y, blockedZ = pos.z;
@@ -162,6 +176,7 @@ export class PhysicsEngine {
         if (this.isFree(pos, half)) {
             body.velocity.y = 0; // не «выстреливаем» вверх — осядем гравитацией
             body.isGrounded = true;
+            body.stepVisualOffset -= (pos.y - blockedY);
         } else {
             pos.set(blockedX, blockedY, blockedZ);
         }

@@ -22,6 +22,9 @@ export class RigidBody extends Component {
 
         // Разрешать авто-шаг на 1 блок (включает PlayerController для игрока).
         this.canStep = options.canStep || false;
+
+        // Визуальная поправка камеры при авто-шаге — см. PhysicsEngine.tryStepUp.
+        this.stepVisualOffset = 0;
     }
 
     start() {
