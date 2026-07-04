@@ -2,30 +2,18 @@
 /* eslint-disable */
 
 /**
- * Генерирует воксели чанка целиком: рельеф с горами (несколько октав
- * шума), пещеры (связный 3D value-noise), руды (hash3d, глубже — реже),
- * вода (заливка низин до уровня моря) и деревья (детерминированные по
- * мировым координатам, поэтому корректно продолжаются через границу
- * чанка).
+ * Генерирует воксели чанка целиком.
  *
- * Возвращает массив длиной chunk_size * world_height * chunk_size,
- * index = y*chunk_size*chunk_size + z*chunk_size + x — совпадает с
- * раскладкой Chunk.data в game/World.js.
+ * Раскладка: index = y*chunk_size*chunk_size + z*chunk_size + x — совпадает
+ * с Chunk.data в game/World.js.
  */
 export function generate_chunk_voxels(chunk_x: number, chunk_z: number, chunk_size: number, world_height: number, seed: number): Uint8Array;
-
-/**
- * Возвращает карту высот чанка (chunk_size * chunk_size значений в [0,1]),
- * index = z * chunk_size + x.
- */
-export function generate_height_map(chunk_x: number, chunk_z: number, chunk_size: number, seed: number): Float32Array;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly generate_chunk_voxels: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly generate_height_map: (a: number, b: number, c: number, d: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;
     readonly __wbindgen_start: () => void;

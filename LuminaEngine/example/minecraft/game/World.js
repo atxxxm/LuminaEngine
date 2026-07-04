@@ -59,10 +59,11 @@ function getMaterial(textureName) {
 function getColorMaterial(colorHex, opacity) {
     const key = `color:${colorHex}`;
     if (!materialCache[key]) {
+        const isTransparent = opacity !== undefined && opacity < 1;
         materialCache[key] = new THREE.MeshLambertMaterial({
             color: colorHex,
-            transparent: true,
-            opacity: opacity === undefined ? 1 : opacity,
+            transparent: isTransparent,
+            opacity: isTransparent ? opacity : 1,
         });
     }
     return materialCache[key];

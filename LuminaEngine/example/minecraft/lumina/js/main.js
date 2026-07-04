@@ -16,6 +16,47 @@ import { WorldManager } from '../../game/WorldManager.js';
 const MOUSE_SENSITIVITY_KEY = 'luminaCraftMouseSensitivity';
 const DEFAULT_MOUSE_SENSITIVITY = 0.002;
 
+const WORLD_HEIGHT = 128;   // совпадает с World.js/Rust
+const SEA_LEVEL = 45;       // совпадает с WATER_LEVEL в lumina-worldgen
+
+// Высота верхнего твёрдого блока в колонне (вода не в счёт), либо -1.
+function surfaceHeight(world, x, z) {
+    for (let y = WORLD_HEIGHT - 1; y > 0; y--) {
+        if (BLOCK.get(world.getVoxel(x, y, z)).isSolid) return y;
+    }
+    return -1;
+}
+
+// Ищет сухую точку спавна (поверхность выше уровня моря) по расширяющимся
+// кольцам вокруг начала координат — терраген теперь разнообразен, и жёсткая
+// точка (8,8) нередко оказывалась под водой. Если рядом только океан,
+// строит аварийную платформу.
+function findSpawn(world) {
+    const cx = 8, cz = 8;
+    // Радиус ограничен областью, которую generate() успел сгенерировать
+    // (регионы -1..1 → примерно -32..63 блока); дальше getVoxel вернёт
+    // воздух и колонна просто не подойдёт.
+    for (let r = 0; r <= 40; r++) {
+        for (let dx = -r; dx <= r; dx++) {
+            for (let dz = -r; dz <= r; dz++) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue; // только периметр кольца
+                const x = cx + dx, z = cz + dz;
+                const y = surfaceHeight(world, x, z);
+                if (y >= SEA_LEVEL + 1) return { x, y, z };
+            }
+        }
+    }
+    // Всё вокруг — океан: платформа на уровне моря.
+    const y = SEA_LEVEL + 2;
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+            world.setVoxel(cx + dx, y, cz + dz, BLOCK.GRASS);
+        }
+    }
+    console.warn('Вокруг только океан — создана платформа спавна.');
+    return { x: cx, y, z: cz };
+}
+
 function formatDate(timestamp) {
     return new Date(timestamp).toLocaleString('ru-RU', {
         day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
@@ -215,36 +256,8 @@ function main() {
             player.transform.rotation.fromArray(saveData.player.rotation);
             inventory.loadData(saveData.player.inventory);
         } else {
-            const spawnX = 8;
-            const spawnZ = 8;
-            let spawnY = 128;
-            let groundFound = false;
-
-            while(spawnY > 0) {
-                const blockId = world.getVoxel(spawnX, spawnY, spawnZ);
-                // Важно: не "не воздух", а именно "твёрдый" — вода (id 9)
-                // не воздух, но не годится как точка опоры для спавна.
-                if (BLOCK.get(blockId).isSolid) {
-                    groundFound = true;
-                    break;
-                }
-                spawnY--;
-            }
-
-            if (!groundFound) {
-                console.warn(`Не найдена земля в точке ${spawnX},${spawnZ}. Создаем платформу.`);
-                spawnY = 64;
-                for(let dx = -1; dx <= 1; dx++) {
-                    for(let dz = -1; dz <= 1; dz++) {
-                        world.setVoxel(spawnX + dx, spawnY, spawnZ + dz, 4);
-                        // 8 — CHUNK_SIZE из World.js (было захардкожено 16)
-                        const chunkToUpdate = world.getChunk(Math.floor((spawnX + dx) / 8), Math.floor((spawnZ + dz) / 8));
-                        if(chunkToUpdate) chunkToUpdate.needsUpdate = true;
-                    }
-                }
-            }
-
-            player.transform.position.set(spawnX + 0.5, spawnY + 2, spawnZ + 0.5);
+            const spawn = findSpawn(world);
+            player.transform.position.set(spawn.x + 0.5, spawn.y + 2, spawn.z + 0.5);
         }
 
         engine.addGameObject(player);

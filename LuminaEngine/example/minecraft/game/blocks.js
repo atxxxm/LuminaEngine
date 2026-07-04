@@ -12,6 +12,8 @@ export const BLOCK = {
     COAL_ORE: 7,
     IRON_ORE: 8,
     WATER: 9,
+    SAND: 10,
+    SNOW: 11,
 
     // ВАЖНО: id блоков здесь должны совпадать с константами BLOCK_* в
     // crates/lumina-worldgen/src/lib.rs — генератор мира зашивает эти id
@@ -31,6 +33,10 @@ export const BLOCK = {
         // `texture` получают MeshLambertMaterial без карты). isSolid:false —
         // игрок в воду проваливается/тонет, полноценного плавания нет.
         9: { name: 'water', isBreakable: false, isTransparent: true, isSolid: false, color: 0x2b6bdb, opacity: 0.6 },
+        // Текстур песка/снега в проекте нет — рисуем плоским цветом
+        // (World.js умеет строить материал из color вместо texture).
+        10: { name: 'sand', isSolid: true, color: 0xdbd3a0 },
+        11: { name: 'snow', isSolid: true, color: 0xf0f5fa },
     },
 
     get(id) {
