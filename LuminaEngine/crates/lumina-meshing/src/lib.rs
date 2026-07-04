@@ -47,13 +47,20 @@ impl MeshData {
     }
 }
 
+// Ссылка на уже записанные в positions/normals/uvs 4 вершины квада — сама
+// геометрия квада уже построена, здесь только то, что нужно, чтобы потом
+// собрать индексы в правильном порядке (материал, направление грани).
+struct QuadRef {
+    base: u32,
+    material: u32,
+    back: bool,
+}
+
 struct Builder {
     positions: Vec<f32>,
     normals: Vec<f32>,
     uvs: Vec<f32>,
-    indices: Vec<u32>,
-    groups: Vec<u32>,
-    last_material: Option<u32>,
+    quads: Vec<QuadRef>,
 }
 
 impl Builder {
@@ -62,9 +69,7 @@ impl Builder {
             positions: Vec::new(),
             normals: Vec::new(),
             uvs: Vec::new(),
-            indices: Vec::new(),
-            groups: Vec::new(),
-            last_material: None,
+            quads: Vec::new(),
         }
     }
 
@@ -100,22 +105,44 @@ impl Builder {
             self.uvs.extend_from_slice(&[0.0, 0.0, w, 0.0, w, h, 0.0, h]);
         }
 
-        let tri: [u32; 6] = if !back {
-            [base, base + 1, base + 2, base, base + 2, base + 3]
-        } else {
-            [base, base + 2, base + 1, base, base + 3, base + 2]
-        };
-        self.indices.extend_from_slice(&tri);
+        self.quads.push(QuadRef { base, material, back });
+    }
 
-        if self.last_material == Some(material) {
-            let n = self.groups.len();
-            self.groups[n - 2] += 6;
-        } else {
-            self.groups.push((self.indices.len() - 6) as u32);
-            self.groups.push(6);
-            self.groups.push(material);
-            self.last_material = Some(material);
+    // Индексы и группы строятся не в порядке обхода мешера (тот скачет по
+    // осям/плоскостям/front-back и почти никогда не даёт длинных пробегов
+    // одного материала подряд), а после сортировки квадов по материалу —
+    // тогда все квады одного материала оказываются рядом и сливаются в
+    // ОДНУ группу вместо тысяч мелких. В three.js каждая группа геометрии —
+    // отдельный вызов отрисовки (draw call) независимо от того, совпадает
+    // ли материал с соседней группой, поэтому это не косметика, а разница
+    // на порядки в числе draw call'ов на регион.
+    fn finish(mut self) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>) {
+        self.quads.sort_by_key(|q| q.material);
+
+        let mut indices = Vec::with_capacity(self.quads.len() * 6);
+        let mut groups: Vec<u32> = Vec::new();
+        let mut last_material: Option<u32> = None;
+
+        for q in &self.quads {
+            let start = indices.len() as u32;
+            if !q.back {
+                indices.extend_from_slice(&[q.base, q.base + 1, q.base + 2, q.base, q.base + 2, q.base + 3]);
+            } else {
+                indices.extend_from_slice(&[q.base, q.base + 2, q.base + 1, q.base, q.base + 3, q.base + 2]);
+            }
+
+            if last_material == Some(q.material) {
+                let n = groups.len();
+                groups[n - 2] += 6;
+            } else {
+                groups.push(start);
+                groups.push(6);
+                groups.push(q.material);
+                last_material = Some(q.material);
+            }
         }
+
+        (self.positions, self.normals, self.uvs, indices, groups)
     }
 }
 
@@ -225,21 +252,23 @@ pub fn generate_region_mesh(
         }
     }
 
+    let (mut positions, normals, uvs, indices, groups) = b.finish();
+
     // Смещение региона в мировых координатах (по Y смещения нет — высота
     // столбца всегда абсолютна).
     let mut i = 0;
-    while i < b.positions.len() {
-        b.positions[i] += origin_x;
-        b.positions[i + 2] += origin_z;
+    while i < positions.len() {
+        positions[i] += origin_x;
+        positions[i + 2] += origin_z;
         i += 3;
     }
 
     MeshData {
-        positions: b.positions,
-        normals: b.normals,
-        uvs: b.uvs,
-        indices: b.indices,
-        groups: b.groups,
+        positions,
+        normals,
+        uvs,
+        indices,
+        groups,
     }
 }
 
