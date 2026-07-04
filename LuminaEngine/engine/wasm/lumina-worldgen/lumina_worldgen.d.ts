@@ -2,9 +2,11 @@
 /* eslint-disable */
 
 /**
- * Генерирует воксели чанка целиком: рельеф (высота из noise2d),
- * пещеры (связный 3D value-noise, вырезает воздух внутри камня) и руды
- * (независимая по вокселю вероятность на основе hash3d, глубже — реже).
+ * Генерирует воксели чанка целиком: рельеф с горами (несколько октав
+ * шума), пещеры (связный 3D value-noise), руды (hash3d, глубже — реже),
+ * вода (заливка низин до уровня моря) и деревья (детерминированные по
+ * мировым координатам, поэтому корректно продолжаются через границу
+ * чанка).
  *
  * Возвращает массив длиной chunk_size * world_height * chunk_size,
  * index = y*chunk_size*chunk_size + z*chunk_size + x — совпадает с
@@ -14,7 +16,7 @@ export function generate_chunk_voxels(chunk_x: number, chunk_z: number, chunk_si
 
 /**
  * Возвращает карту высот чанка (chunk_size * chunk_size значений в [0,1]),
- * index = z * chunk_size + x — совместимо с прежним GPU-путём.
+ * index = z * chunk_size + x.
  */
 export function generate_height_map(chunk_x: number, chunk_z: number, chunk_size: number, seed: number): Float32Array;
 

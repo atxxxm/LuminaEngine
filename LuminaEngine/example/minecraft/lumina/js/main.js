@@ -6,6 +6,7 @@ import { PlayerController } from '../../game/PlayerController.js';
 import { RigidBody } from './physics/RigidBody.js';
 import { BoxCollider } from './physics/Colliders.js';
 import { World } from '../../game/World.js';
+import { BLOCK } from '../../game/blocks.js';
 import { Inventory } from '../../game/Inventory.js';
 import { UIManager } from '../../game/UIManager.js';
 import { BlockInteraction } from '../../game/BlockInteraction.js';
@@ -81,7 +82,9 @@ function main() {
 
             while(spawnY > 0) {
                 const blockId = world.getVoxel(spawnX, spawnY, spawnZ);
-                if (blockId !== 0) {
+                // Важно: не "не воздух", а именно "твёрдый" — вода (id 9)
+                // не воздух, но не годится как точка опоры для спавна.
+                if (BLOCK.get(blockId).isSolid) {
                     groundFound = true;
                     break;
                 }
@@ -93,8 +96,9 @@ function main() {
                 spawnY = 64;
                 for(let dx = -1; dx <= 1; dx++) {
                     for(let dz = -1; dz <= 1; dz++) {
-                        world.setVoxel(spawnX + dx, spawnY, spawnZ + dz, 4); 
-                        const chunkToUpdate = world.getChunk(Math.floor((spawnX + dx) / 16), Math.floor((spawnZ + dz) / 16));
+                        world.setVoxel(spawnX + dx, spawnY, spawnZ + dz, 4);
+                        // 8 — CHUNK_SIZE из World.js (было захардкожено 16)
+                        const chunkToUpdate = world.getChunk(Math.floor((spawnX + dx) / 8), Math.floor((spawnZ + dz) / 8));
                         if(chunkToUpdate) chunkToUpdate.needsUpdate = true;
                     }
                 }
@@ -112,8 +116,10 @@ function main() {
         engine.addGameObject(skyManager);
 
         // --- Add world update to the game loop ---
+        // Позиция игрока нужна World.update() для подгрузки/выгрузки
+        // регионов по дальности видимости (render distance).
         const worldUpdater = new GameObject('WorldUpdater');
-        worldUpdater.update = world.update.bind(world);
+        worldUpdater.update = (deltaTime) => world.update(deltaTime, player.transform.position);
         engine.addGameObject(worldUpdater);
 
         // --- Setup Auto-Save and Inventory toggle ---

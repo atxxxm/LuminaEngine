@@ -197,12 +197,17 @@ pub fn generate_region_mesh(
                     xb[d] += 1;
                     let bv = get(xb[0], xb[1], xb[2]);
 
-                    front_mask[n] = if a != 0 && transparent(bv) {
+                    // `bv != a` — не рисуем грань между двумя соседними
+                    // вокселями ОДНОГО типа, даже если он прозрачный: иначе
+                    // сплошной объём воды или блок листвы получает грани
+                    // между каждой парой соседних вокселей внутри себя
+                    // (для воды — сотни лишних квадов внутри одного озера).
+                    front_mask[n] = if a != 0 && transparent(bv) && bv != a {
                         material_for(a, d, true) + 1
                     } else {
                         0
                     };
-                    back_mask[n] = if bv != 0 && transparent(a) {
+                    back_mask[n] = if bv != 0 && transparent(a) && bv != a {
                         material_for(bv, d, false) + 1
                     } else {
                         0
