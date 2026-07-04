@@ -18,9 +18,20 @@
         #inventory { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 462px; background: rgba(10,10,10,0.8); border: 3px solid #555; padding: 10px; display: none; pointer-events: all; }
         .inventory-grid { display: grid; grid-template-columns: repeat(9, 50px); gap: 2px; }
         #debug-info { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.5); padding: 5px; font-size: 12px; line-height: 1.2; }
-        #start-menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #333; display: flex; flex-direction: column; justify-content: center; align-items: center; pointer-events: all; }
-        #start-menu h1 { font-size: 48px; }
-        #start-menu button { font-size: 24px; padding: 10px 20px; margin: 10px; cursor: pointer; }
+        .menu-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #333; display: none; flex-direction: column; justify-content: center; align-items: center; pointer-events: all; }
+        .menu-screen.active { display: flex; }
+        .menu-screen h1 { font-size: 48px; margin-bottom: 20px; }
+        .menu-screen button { font-size: 22px; padding: 10px 20px; margin: 6px; cursor: pointer; }
+        .menu-screen label { font-size: 18px; margin: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+        .menu-screen input[type="text"] { font-size: 18px; padding: 6px; width: 280px; }
+        .menu-row { display: flex; }
+        #world-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow-y: auto; margin-bottom: 16px; min-width: 480px; }
+        #world-list .empty-hint { opacity: 0.7; padding: 20px; }
+        .world-entry { display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.08); padding: 10px 14px; border-radius: 4px; gap: 12px; }
+        .world-entry .world-info { text-align: left; }
+        .world-entry .world-info .world-name { font-size: 18px; font-weight: bold; }
+        .world-entry .world-info .world-meta { font-size: 12px; opacity: 0.7; }
+        .world-entry .world-actions button { font-size: 14px; padding: 6px 10px; margin: 0 0 0 4px; }
         #instructions {
             position: absolute;
             width: 100%;
@@ -52,10 +63,41 @@
             <div class="inventory-grid" id="hotbar-inventory-grid"></div>
         </div>
     </div>
-    <div id="start-menu">
+    <div id="screen-main" class="menu-screen active">
         <h1>LuminaCraft</h1>
-        <button id="new-world-btn">Новый мир</button>
-        <button id="load-world-btn">Загрузить мир</button>
+        <button id="play-btn">Играть</button>
+        <button id="settings-btn">Настройки</button>
+    </div>
+
+    <div id="screen-worlds" class="menu-screen">
+        <h1>Выбор мира</h1>
+        <div id="world-list"></div>
+        <div class="menu-row">
+            <button id="create-world-btn">Создать новый мир</button>
+            <button id="worlds-back-btn">Назад</button>
+        </div>
+    </div>
+
+    <div id="screen-create-world" class="menu-screen">
+        <h1>Новый мир</h1>
+        <label>Название
+            <input id="new-world-name" type="text" maxlength="40">
+        </label>
+        <label>Сид (необязательно)
+            <input id="new-world-seed" type="text" placeholder="оставь пустым для случайного">
+        </label>
+        <div class="menu-row">
+            <button id="confirm-create-world-btn">Создать</button>
+            <button id="create-world-back-btn">Назад</button>
+        </div>
+    </div>
+
+    <div id="screen-settings" class="menu-screen">
+        <h1>Настройки</h1>
+        <label>Чувствительность мыши: <span id="mouse-sensitivity-value"></span>
+            <input id="mouse-sensitivity-slider" type="range" min="0.0005" max="0.005" step="0.0001">
+        </label>
+        <button id="settings-back-btn">Назад</button>
     </div>
     <div id="instructions">
         <p>Игра на паузе</p>

@@ -206,7 +206,9 @@ export class World {
         this.scene = scene;
         this.chunks = {};
         this.regions = {};
-        this.seed = seed || Math.random() * 10000;
+        // ВАЖНО: не `seed || ...` — 0 валидный сид, но falsy, из-за чего
+        // "|| Math.random()" тихо подменял бы его случайным.
+        this.seed = (seed !== undefined && seed !== null) ? seed : Math.random() * 10000;
 
         // Стриминг регионов по дальности видимости от игрока.
         this.streamQueue = [];

@@ -14,7 +14,10 @@ export class PlayerController extends Component {
         this.crouchSpeed = 2.0;
         this.jumpForce = 8;
 
-        this.mouseSensitivity = 0.002;
+        // Настройка из меню "Настройки" (main.js), хранится отдельно от
+        // сохранений миров — это предпочтение игрока, а не часть мира.
+        const savedSensitivity = parseFloat(localStorage.getItem('luminaCraftMouseSensitivity'));
+        this.mouseSensitivity = Number.isFinite(savedSensitivity) ? savedSensitivity : 0.002;
 
         this.isCrouching = false;
         this.standHeight = 0.8;
