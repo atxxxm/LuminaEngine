@@ -259,6 +259,8 @@ function main() {
             const spawn = findSpawn(world);
             player.transform.position.set(spawn.x + 0.5, spawn.y + 2, spawn.z + 0.5);
         }
+        // Точка респавна при падении в пустоту = текущая позиция спавна.
+        player.getComponent(PlayerController).spawnPoint.copy(player.transform.position);
 
         engine.addGameObject(player);
         engine.setPlayer(player);

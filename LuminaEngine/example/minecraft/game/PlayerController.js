@@ -12,7 +12,14 @@ export class PlayerController extends Component {
         this.moveSpeed = 4.0;
         this.runSpeed = 7.0;
         this.crouchSpeed = 2.0;
+        this.swimSpeed = 3.5;
         this.jumpForce = 8;
+        this.swimUpForce = 4.5;
+        this.swimDownForce = 3.5;
+
+        // Куда возвращать при падении в пустоту. Задаётся из main.js
+        // (точка спавна нового мира или сохранённая позиция).
+        this.spawnPoint = new THREE.Vector3(8.5, 70, 8.5);
 
         // Настройка из меню "Настройки" (main.js), хранится отдельно от
         // сохранений миров — это предпочтение игрока, а не часть мира.
@@ -30,6 +37,8 @@ export class PlayerController extends Component {
             console.error("PlayerController requires a RigidBody component.");
             return;
         }
+
+        this.rigidBody.canStep = true; // авто-шаг на 1 блок
 
         this.camera = this.engine.renderer.camera;
         this.transform.add(this.camera);
@@ -50,11 +59,10 @@ export class PlayerController extends Component {
     update(deltaTime) {
         // --- Защита от падения в пустоту ---
         if (this.transform.position.y < -8) {
-            // Если игрок упал слишком низко, телепортируем его на точку спавна
-            // В более сложной игре здесь можно было бы вызывать метод респавна
-            this.transform.position.set(8.5, 70, 8.5);
-            this.rigidBody.velocity.set(0, 0, 0); // Сбрасываем скорость, чтобы остановить падение
-            return; // Пропускаем остальную логику в этом кадре
+            // Респавн к реальной точке спавна мира (раньше был хардкод).
+            this.transform.position.copy(this.spawnPoint);
+            this.rigidBody.velocity.set(0, 0, 0); // остановить падение
+            return; // пропускаем остальную логику в этом кадре
         }
         
         if (!this.engine.inputManager.isPointerLocked()) {
@@ -87,8 +95,11 @@ export class PlayerController extends Component {
         // Speed modification
         this.isCrouching = input.isKeyDown('ControlLeft');
         const isRunning = input.isKeyDown('ShiftLeft') && !this.isCrouching;
-        const currentSpeed = this.isCrouching ? this.crouchSpeed : (isRunning ? this.runSpeed : this.moveSpeed);
-        
+        const inWater = this.rigidBody.inWater;
+        const currentSpeed = inWater
+            ? this.swimSpeed
+            : (this.isCrouching ? this.crouchSpeed : (isRunning ? this.runSpeed : this.moveSpeed));
+
         this.rigidBody.velocity.x = moveDirection.x * currentSpeed;
         this.rigidBody.velocity.z = moveDirection.z * currentSpeed;
 
@@ -96,8 +107,15 @@ export class PlayerController extends Component {
         const targetHeight = this.isCrouching ? this.crouchHeight : this.standHeight;
         this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, targetHeight, deltaTime * 10);
 
-        // Jumping
-        if (input.wasKeyJustPressed('Space') && this.rigidBody.isGrounded) {
+        if (inWater) {
+            // В воде Space — выгребать вверх, Ctrl — вниз; иначе плавучесть
+            // из PhysicsEngine медленно тянет ко дну.
+            if (input.isKeyDown('Space')) {
+                this.rigidBody.velocity.y = this.swimUpForce;
+            } else if (input.isKeyDown('ControlLeft')) {
+                this.rigidBody.velocity.y = -this.swimDownForce;
+            }
+        } else if (input.wasKeyJustPressed('Space') && this.rigidBody.isGrounded) {
             this.rigidBody.velocity.y = this.jumpForce;
         }
     }

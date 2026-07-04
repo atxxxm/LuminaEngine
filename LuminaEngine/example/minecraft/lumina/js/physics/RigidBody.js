@@ -16,6 +16,12 @@ export class RigidBody extends Component {
 
         // Находится ли объект на земле (для прыжков)
         this.isGrounded = false;
+
+        // Выставляется движком: тело сейчас в воде (плавучесть/сопротивление).
+        this.inWater = false;
+
+        // Разрешать авто-шаг на 1 блок (включает PlayerController для игрока).
+        this.canStep = options.canStep || false;
     }
 
     start() {

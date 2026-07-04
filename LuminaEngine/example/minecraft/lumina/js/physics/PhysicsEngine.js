@@ -1,13 +1,25 @@
 // Lumina/js/physics/PhysicsEngine.js
+//
+// Пооосевые коллизии AABB против воксельного мира: тело двигается и
+// разрешается отдельно по Y, X, Z. Это надёжнее прежнего «сдвинуть сразу
+// по всем осям и вытолкнуть по минимальному перекрытию» (меньше застреваний
+// и туннелирования) и, главное, делает чистым авто-шаг на 1 блок.
+//
+// Плюс физика воды: в воде слабее гравитация (выталкивание) и есть
+// вертикальное демпфирование, так что игрок не проваливается камнем, а
+// медленно тонет и может выгребать вверх (см. PlayerController).
 
-import { Collider, BoxCollider } from './Colliders.js';
+import { BoxCollider } from './Colliders.js';
 import { BLOCK } from '../../../game/blocks.js';
 import * as THREE from 'three';
+
+const EPS = 1e-3;
+const STEP_HEIGHT = 1.05; // на сколько авто-шаг поднимает тело (чуть больше блока)
 
 export class PhysicsEngine {
     constructor() {
         this.rigidBodies = [];
-        this.gravity = new THREE.Vector3(0, -20, 0); // Увеличим гравитацию для "отзывчивости"
+        this.gravity = new THREE.Vector3(0, -20, 0);
         this.world = null;
     }
 
@@ -19,119 +31,160 @@ export class PhysicsEngine {
         this.rigidBodies.push(body);
     }
 
+    isSolidAt(x, y, z) {
+        return BLOCK.get(this.world.getVoxel(x, y, z)).isSolid;
+    }
+
+    isWaterAt(x, y, z) {
+        return this.world.getVoxel(x, y, z) === BLOCK.WATER;
+    }
+
     update(deltaTime) {
         if (!this.world) return;
+        // Ограничиваем dt: на редком большом кадре (после подгрузки региона)
+        // тело иначе может «прошить» блок за один шаг.
+        const dt = Math.min(deltaTime, 0.05);
 
-        this.rigidBodies.forEach(body => {
-            if (body.bodyType === 'dynamic') {
-                // Применяем гравитацию
-                body.velocity.y += this.gravity.y * deltaTime;
+        for (const body of this.rigidBodies) {
+            if (body.bodyType !== 'dynamic') continue;
+            const collider = body.gameObject.getComponent(BoxCollider);
+            if (!collider) continue;
+            const half = collider.halfSize;
 
-                // Применяем скорость к позиции
-                body.transform.position.add(body.velocity.clone().multiplyScalar(deltaTime));
-                
-                // Сбрасываем состояние "на земле" перед проверкой
-                body.isGrounded = false;
+            body.inWater = this.bodyInWater(body, half);
+
+            const g = body.inWater ? this.gravity.y * 0.28 : this.gravity.y;
+            body.velocity.y += g * dt;
+
+            if (body.inWater) {
+                // Демпфирование, независимое от частоты кадров.
+                const vDrag = Math.pow(0.55, dt * 60);
+                const hDrag = Math.pow(0.85, dt * 60);
+                body.velocity.y *= vDrag;
+                body.velocity.x *= hDrag;
+                body.velocity.z *= hDrag;
+            } else if (body.velocity.y < -60) {
+                body.velocity.y = -60; // терминальная скорость падения
             }
-        });
 
-        // Итерации для более стабильного разрешения столкновений
-        const iterations = 5;
-        for (let i = 0; i < iterations; i++) {
-            this.rigidBodies.forEach(body => {
-                if (body.bodyType === 'dynamic') {
-                    this.resolveBodyVsWorld(body);
-                }
-            });
+            this.moveAndCollide(body, half, dt);
         }
     }
 
-    resolveBodyVsWorld(body) {
-        const collider = body.gameObject.getComponent(BoxCollider);
-        if (!collider) return;
-
+    bodyInWater(body, half) {
         const pos = body.transform.position;
-        const halfSize = collider.halfSize;
-
-        // Создаем AABB (Axis-Aligned Bounding Box) для игрока
-        const bodyAABB = new THREE.Box3(
-            pos.clone().sub(halfSize),
-            pos.clone().add(halfSize)
+        // Тело в воде, если вода на уровне ног или центра.
+        const feetY = pos.y - half.y + 0.1;
+        return (
+            this.isWaterAt(Math.floor(pos.x), Math.floor(feetY), Math.floor(pos.z)) ||
+            this.isWaterAt(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z))
         );
+    }
 
-        // Получаем координаты вокселей, которые могут пересекаться с игроком
-        const minX = Math.floor(bodyAABB.min.x);
-        const maxX = Math.ceil(bodyAABB.max.x);
-        const minY = Math.floor(bodyAABB.min.y);
-        const maxY = Math.ceil(bodyAABB.max.y);
-        const minZ = Math.floor(bodyAABB.min.z);
-        const maxZ = Math.ceil(bodyAABB.max.z);
+    moveAndCollide(body, half, dt) {
+        const pos = body.transform.position;
+        const vel = body.velocity;
+        body.isGrounded = false;
 
-        // Проверяем каждый потенциально конфликтующий воксель
-        for (let y = minY; y < maxY; y++) {
-            for (let z = minZ; z < maxZ; z++) {
-                for (let x = minX; x < maxX; x++) {
-                    const blockId = this.world.getVoxel(x, y, z);
-                    const blockProps = BLOCK.get(blockId);
+        // Целевые горизонтальные координаты (до разрешения) — понадобятся
+        // авто-шагу, т.к. resolveAxis обнуляет vel по заблокированной оси.
+        const targetX = pos.x + vel.x * dt;
+        const targetZ = pos.z + vel.z * dt;
 
-                    if (blockProps.isSolid) {
-                        // Этот блок твердый, проверяем столкновение
-                        const blockAABB = new THREE.Box3(
-                            new THREE.Vector3(x, y, z),
-                            new THREE.Vector3(x + 1, y + 1, z + 1)
-                        );
-                        
-                        if (bodyAABB.intersectsBox(blockAABB)) {
-                            // Есть столкновение, вычисляем вектор проникновения
-                            const penetration = this.getPenetrationVector(bodyAABB, blockAABB);
-                            
-                            // Смещаем игрока, чтобы убрать проникновение
-                            pos.add(penetration);
+        pos.y += vel.y * dt;
+        this.resolveAxis(body, half, 'y');
 
-                            // Обновляем AABB игрока после смещения
-                            bodyAABB.min.add(penetration);
-                            bodyAABB.max.add(penetration);
+        pos.x = targetX;
+        const hitX = this.resolveAxis(body, half, 'x');
 
-                            // Если столкнулись с полом/потолком, гасим вертикальную скорость
-                            if (Math.abs(penetration.y) > 0) {
-                                body.velocity.y = 0;
-                                // Если столкнулись с полом (вытолкнули вверх), значит стоим на земле
-                                if (penetration.y > 0) {
-                                    body.isGrounded = true;
-                                }
-                            }
-                            // Если столкнулись со стеной, гасим горизонтальную скорость в этом направлении
-                             if (Math.abs(penetration.x) > 0) body.velocity.x = 0;
-                             if (Math.abs(penetration.z) > 0) body.velocity.z = 0;
-                        }
+        pos.z = targetZ;
+        const hitZ = this.resolveAxis(body, half, 'z');
+
+        if (body.canStep && body.isGrounded && !body.inWater && (hitX || hitZ)) {
+            this.tryStepUp(body, half, targetX, targetZ);
+        }
+    }
+
+    // Двигает тело только что сдвинули по оси `axis`; выталкивает из твёрдых
+    // блоков вдоль этой оси. Возвращает true при столкновении.
+    resolveAxis(body, half, axis) {
+        const pos = body.transform.position;
+        const vel = body.velocity;
+        const dir = vel[axis];
+        if (dir === 0) return false; // по этой оси в этом кадре не двигались
+
+        const bMin = { x: pos.x - half.x, y: pos.y - half.y, z: pos.z - half.z };
+        const bMax = { x: pos.x + half.x, y: pos.y + half.y, z: pos.z + half.z };
+        const lo = { x: Math.floor(bMin.x), y: Math.floor(bMin.y), z: Math.floor(bMin.z) };
+        const hi = { x: Math.floor(bMax.x), y: Math.floor(bMax.y), z: Math.floor(bMax.z) };
+
+        let corrected = null;
+        for (let y = lo.y; y <= hi.y; y++) {
+            for (let z = lo.z; z <= hi.z; z++) {
+                for (let x = lo.x; x <= hi.x; x++) {
+                    if (!this.isSolidAt(x, y, z)) continue;
+                    // Реальное перекрытие по всем трём осям (не просто попадание
+                    // в диапазон клеток) — иначе блок сбоку ложно засчитается.
+                    if (!(bMin.x < x + 1 - EPS && bMax.x > x + EPS)) continue;
+                    if (!(bMin.y < y + 1 - EPS && bMax.y > y + EPS)) continue;
+                    if (!(bMin.z < z + 1 - EPS && bMax.z > z + EPS)) continue;
+
+                    const cell = { x, y, z };
+                    const blockMin = cell[axis];
+                    const blockMax = cell[axis] + 1;
+                    const np = dir > 0 ? blockMin - half[axis] : blockMax + half[axis];
+                    if (corrected === null) corrected = np;
+                    else corrected = dir > 0 ? Math.min(corrected, np) : Math.max(corrected, np);
+                }
+            }
+        }
+
+        if (corrected !== null) {
+            pos[axis] = corrected;
+            if (axis === 'y' && dir < 0) body.isGrounded = true;
+            vel[axis] = 0;
+            return true;
+        }
+        return false;
+    }
+
+    // Тело есть на земле, но его горизонтально заблокировало. Пробуем поднять
+    // на STEP_HEIGHT к желаемой горизонтальной позиции — если там свободно,
+    // «залезаем» на ступеньку (иначе откатываемся к заблокированной точке).
+    tryStepUp(body, half, targetX, targetZ) {
+        const pos = body.transform.position;
+        const blockedX = pos.x, blockedY = pos.y, blockedZ = pos.z;
+
+        pos.y = blockedY + STEP_HEIGHT;
+        pos.x = targetX;
+        pos.z = targetZ;
+
+        if (this.isFree(pos, half)) {
+            body.velocity.y = 0; // не «выстреливаем» вверх — осядем гравитацией
+            body.isGrounded = true;
+        } else {
+            pos.set(blockedX, blockedY, blockedZ);
+        }
+    }
+
+    // Свободна ли AABB от твёрдых блоков в текущей позиции.
+    isFree(pos, half) {
+        const bMin = { x: pos.x - half.x, y: pos.y - half.y, z: pos.z - half.z };
+        const bMax = { x: pos.x + half.x, y: pos.y + half.y, z: pos.z + half.z };
+        const lo = { x: Math.floor(bMin.x), y: Math.floor(bMin.y), z: Math.floor(bMin.z) };
+        const hi = { x: Math.floor(bMax.x), y: Math.floor(bMax.y), z: Math.floor(bMax.z) };
+        for (let y = lo.y; y <= hi.y; y++) {
+            for (let z = lo.z; z <= hi.z; z++) {
+                for (let x = lo.x; x <= hi.x; x++) {
+                    if (!this.isSolidAt(x, y, z)) continue;
+                    if (bMin.x < x + 1 - EPS && bMax.x > x + EPS &&
+                        bMin.y < y + 1 - EPS && bMax.y > y + EPS &&
+                        bMin.z < z + 1 - EPS && bMax.z > z + EPS) {
+                        return false;
                     }
                 }
             }
         }
-    }
-    
-    getPenetrationVector(boxA, boxB) {
-        const overlap = new THREE.Vector3(
-            Math.min(boxA.max.x, boxB.max.x) - Math.max(boxA.min.x, boxB.min.x),
-            Math.min(boxA.max.y, boxB.max.y) - Math.max(boxA.min.y, boxB.min.y),
-            Math.min(boxA.max.z, boxB.max.z) - Math.max(boxA.min.z, boxB.min.z)
-        );
-
-        const centerA = new THREE.Vector3();
-        boxA.getCenter(centerA);
-        const centerB = new THREE.Vector3();
-        boxB.getCenter(centerB);
-        const delta = centerA.sub(centerB);
-
-        const penetration = new THREE.Vector3();
-        if (overlap.x < overlap.y && overlap.x < overlap.z) {
-            penetration.x = overlap.x * Math.sign(delta.x);
-        } else if (overlap.y < overlap.z) {
-            penetration.y = overlap.y * Math.sign(delta.y);
-        } else {
-            penetration.z = overlap.z * Math.sign(delta.z);
-        }
-        
-        return penetration;
+        return true;
     }
 }
