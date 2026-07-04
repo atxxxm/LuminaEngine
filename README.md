@@ -3,68 +3,44 @@
 
 ---
 
-<details open>
-<summary><strong>🇬🇧 English</strong></summary>
-
-### What is LuminaEngine?
-
-**LuminaEngine** is a lightweight 3D game engine built with JavaScript and **THREE.js**. It is designed around the **Entity-Component-System (ECS)** pattern, promoting a modular, flexible, and easy-to-understand approach to game development.
-
-It's perfect for educational purposes, game jams, and rapid prototyping of 3D web experiences.
-
-### ✨ Core Philosophy
-
-*   **Simplicity:** No complex setup. The engine provides the essential tools to get you started quickly. The code is clear and well-commented to facilitate learning.
-*   **Modularity:** Build your game objects by composing small, reusable **Components**. A `GameObject` is just a container; its behavior is defined entirely by the Components you attach.
-*   **Flexibility:** Built on top of THREE.js, giving you direct access to its powerful rendering capabilities when you need to go beyond the engine's core features.
-
-### 🚀 Key Concepts
-
-*   **`Engine`**: The central orchestrator that runs the game loop and manages all systems (rendering, input).
-*   **`GameObject`**: A container in the scene with a `transform` (position, rotation, scale).
-*   **`Component`**: The logic and data. Attach components like `PlayerController` or `MeshRenderer` to bring your `GameObjects` to life.
-
-### 🏁 Getting Started
-
-1.  Clone this repository.
-2.  Open `index.html` in your browser to see the project hub.
-3.  Explore the `/example/3dGame/` folder to see a practical example of the engine in action.
-4.  Check out the detailed [Documentation](docs/en-main.md) to learn more about the API.
-
-</details>
-
-<details>
-<summary><strong>🇷🇺 Русский</strong></summary>
-
 ### Что такое LuminaEngine?
 
-**LuminaEngine** — это легковесный 3D-игровой движок, созданный на JavaScript и **THREE.js**. Он основан на архитектурном паттерне **Entity-Component-System (ECS)**, что обеспечивает модульный, гибкий и простой для понимания подход к разработке игр.
+**LuminaEngine** — лёгкий 3D-движок на JavaScript и **THREE.js**, построенный на паттерне **Entity-Component-System (ECS)**: модульный и простой для понимания подход к разработке игр.
 
-Движок идеально подходит для образовательных целей, геймджемов и быстрого прототипирования 3D-проектов в вебе.
+Подходит для обучения, геймджемов и быстрого прототипирования 3D-проектов в вебе.
 
-### ✨ Ключевая философия
+### ✨ Философия
 
-*   **Простота:** Никакой сложной настройки. Движок предоставляет базовые инструменты, чтобы вы могли быстро начать работу. Код написан чисто и хорошо прокомментирован для облегчения изучения.
-*   **Модульность:** Создавайте игровые объекты, комбинируя небольшие, переиспользуемые **Компоненты**. `GameObject` — это просто контейнер; его поведение полностью определяется добавленными компонентами.
-*   **Гибкость:** Построен на базе THREE.js, что дает вам прямой доступ ко всей мощи этой библиотеки, когда базовых возможностей движка становится недостаточно.
+- **Простота.** Никакой сложной настройки — движок даёт базовые инструменты, чтобы быстро начать. Код написан чисто и понятно.
+- **Модульность.** Игровые объекты собираются из небольших переиспользуемых **компонентов**. `GameObject` — просто контейнер; его поведение полностью определяется добавленными компонентами.
+- **Гибкость.** Построен поверх THREE.js — прямой доступ к рендерингу, когда базовых возможностей движка не хватает.
 
 ### 🚀 Основные концепции
 
-*   **`Engine`**: Центральный "оркестр", который запускает игровой цикл и управляет всеми системами (рендеринг, ввод).
-*   **`GameObject`**: Контейнер на сцене, обладающий `transform` (позиция, вращение, масштаб).
-*   **`Component`**: Логика и данные. Прикрепляйте компоненты, такие как `PlayerController` или `MeshRenderer`, чтобы "оживить" ваши `GameObject`'ы.
+- **`Engine`** — центральный цикл движка: запускает игровой цикл, управляет рендерингом, вводом и физикой; `start()`/`stop()` позволяют полностью останавливать и разбирать сессию (например, при выходе в меню).
+- **`GameObject`** — контейнер на сцене с `transform` (позиция/вращение/масштаб) и списком компонентов.
+- **`Component`** — логика и данные. Жизненный цикл: `start()` при инициализации, `update(deltaTime)` каждый кадр, `onDestroy()` при остановке движка — для освобождения ресурсов (свет, дополнительные меши, слушатели), добавленных компонентом вне своего `transform`.
+- **`Renderer`** — обёртка над `THREE.WebGLRenderer`: сцена, камера, resize, вывод FPS/координат.
+- **`InputManager`** — клавиатура, мышь (включая pointer lock) и колесо прокрутки в единообразном API (`isKeyDown`, `wasKeyJustPressed`, `getMouseDelta`).
+- **`PhysicsEngine` / `RigidBody` / `Collider`** — простая AABB-физика: гравитация, столкновения, `BoxCollider`/`HeightfieldCollider`.
+
+### ⚙️ Rust/WASM-ускорение (опционально)
+
+Для сценариев с процедурной генерацией больших миров в движке есть набор Rust-крейтов (`crates/`), компилируемых в WebAssembly:
+
+- **`lumina-meshing`** — greedy-мешинг вокселей (объединение соседних одинаковых граней в меньшее число полигонов и draw call'ов).
+- **`lumina-worldgen`** — процедурная генерация рельефа (шум Перлина, FBM, сплайны высоты).
+- **`lumina-save`** — RLE-сжатие данных чанков для компактного сохранения.
+
+Это независимая, необязательная часть движка — обычный ECS-код (`engine/js/`) прекрасно работает и без неё. Собрать модули: `npm run build:wasm` (нужен установленный [wasm-pack](https://rustwasm.github.io/wasm-pack/)).
 
 ### 🏁 Начало работы
 
-1.  Клонируйте этот репозиторий.
-2.  Откройте файл `index.html` в браузере, чтобы увидеть хаб проекта.
-3.  Изучите папку `/example/3dGame/`, чтобы увидеть практический пример работы движка.
-4.  Ознакомьтесь с подробной [Документацией](docs/ru-main.md), чтобы узнать больше об API.
+1. Клонируйте репозиторий.
+2. Откройте `engine/index.html` в браузере, чтобы увидеть хаб движка.
+3. Посмотрите `example/3dGame/` — минимальный пример на базовом ECS-движке (без Rust/WASM).
+4. Документация по API: [ru-main.md](docs/ru-main.md).
 
-</details>
+### 📄 Лицензия
 
----
-
-### 📄 License
-
-This project is licensed under the MIT License.
+Проект распространяется по лицензии MIT.
