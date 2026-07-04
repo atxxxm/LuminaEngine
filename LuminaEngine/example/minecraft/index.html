@@ -32,20 +32,23 @@
         .world-entry .world-info .world-name { font-size: 18px; font-weight: bold; }
         .world-entry .world-info .world-meta { font-size: 12px; opacity: 0.7; }
         .world-entry .world-actions button { font-size: 14px; padding: 6px 10px; margin: 0 0 0 4px; }
-        #instructions {
+        #pause-menu {
             position: absolute;
+            top: 0; left: 0;
             width: 100%;
             height: 100%;
-            display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            background: rgba(0,0,0,0.5);
+            background: rgba(0,0,0,0.6);
             color: white;
             text-align: center;
-            font-size: 1.5em;
-            display: none; /* Initially hidden */
+            pointer-events: all;
+            display: none;
         }
+        #pause-menu.active { display: flex; }
+        #pause-menu h2 { font-size: 36px; margin-bottom: 20px; }
+        #pause-menu button { font-size: 22px; padding: 10px 20px; margin: 6px; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -99,9 +102,11 @@
         </label>
         <button id="settings-back-btn">Назад</button>
     </div>
-    <div id="instructions">
-        <p>Игра на паузе</p>
-        <p>(Нажмите, чтобы продолжить)</p>
+    <div id="pause-menu">
+        <h2>Пауза</h2>
+        <button id="resume-btn">Продолжить</button>
+        <button id="save-quit-btn">Сохранить и выйти</button>
+        <button id="quit-btn">Выйти без сохранения</button>
     </div>
 
     <!-- Загрузчик THREE.js (можно скачать или использовать CDN) -->

@@ -33,7 +33,18 @@ export class PlayerController extends Component {
 
         this.camera = this.engine.renderer.camera;
         this.transform.add(this.camera);
-        this.camera.position.y = this.standHeight;
+        this.camera.position.set(0, this.standHeight, 0);
+        // Камера — общий на все сессии объект (engine.renderer.camera):
+        // без сброса в новый мир унаследовался бы поворот из прошлого.
+        this.camera.rotation.set(0, 0, 0);
+    }
+
+    onDestroy() {
+        // Снимаем камеру с transform игрока — иначе при выходе в меню она
+        // осталась бы ребёнком удаляемого объекта.
+        if (this.camera && this.camera.parent) {
+            this.camera.parent.remove(this.camera);
+        }
     }
 
     update(deltaTime) {

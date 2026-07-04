@@ -19,20 +19,24 @@ export class InputManager {
         document.addEventListener('wheel', (e) => this.scrollDelta += Math.sign(e.deltaY));
 
 
-        document.addEventListener('click', () => {
-             if (document.pointerLockElement !== this.lockElement) {
+        // Захват курсора — только по клику именно в игровом полотне, а не
+        // по всему документу: иначе клики по кнопкам меню паузы тоже
+        // запрашивали бы pointer lock и мешали. Кнопка "Продолжить" в
+        // main.js запрашивает захват явно.
+        this.lockElement.addEventListener('click', () => {
+            if (document.pointerLockElement !== this.lockElement) {
                 this.lockElement.requestPointerLock();
             }
         });
 
         document.addEventListener('pointerlockchange', () => {
-            const instructions = document.getElementById('instructions');
             if (document.pointerLockElement === this.lockElement) {
                 document.addEventListener('mousemove', this.boundOnMouseMove, false);
-                if (instructions) instructions.style.display = 'none';
             } else {
                 document.removeEventListener('mousemove', this.boundOnMouseMove, false);
-                if (instructions) instructions.style.display = 'block';
+                // Сбрасываем зажатые клавиши/кнопки, чтобы при потере захвата
+                // (Esc, alt-tab) они не "залипли". Оверлей паузы показывает
+                // main.js по этому же событию.
                 this.keys = {};
                 this.mouseButtons = {};
             }

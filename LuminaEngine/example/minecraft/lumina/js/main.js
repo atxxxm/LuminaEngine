@@ -151,18 +151,39 @@ function main() {
         });
     }
 
-    // Меню стартует игру ровно один раз за загрузку страницы — "назад в
-    // меню" из игры тут нет. Без этой защиты повторный клик (например,
-    // двойной клик или гонка между обработчиками) вызвал бы startGame()
-    // ещё раз поверх уже бегущего engine: addGameObject добавил бы второй
-    // набор RigidBody/Inventory/keydown-слушателей, а engine.start()
-    // запустил бы вторую параллельную цепочку requestAnimationFrame рядом
-    // с первой.
-    let gameStarted = false;
+    // --- Пауза / выход в меню ---
+    // Активная игровая сессия (или null в меню). Одна за раз — второй заход
+    // невозможен, пока текущий не завершён через exitToMenu(). Это же
+    // защищает от повторного startGame() поверх уже бегущего engine.
+    let session = null;
+    const pauseMenu = document.getElementById('pause-menu');
+    const canvasEl = engine.renderer.domElement;
+
+    document.getElementById('resume-btn').addEventListener('click', () => {
+        if (session) session.enterPlaying();
+    });
+    document.getElementById('save-quit-btn').addEventListener('click', () => exitToMenu(true));
+    document.getElementById('quit-btn').addEventListener('click', () => exitToMenu(false));
+
+    async function exitToMenu(save) {
+        if (!session) return;
+        const s = session;
+        session = null; // сразу, чтобы обработчики/кнопки не сработали дважды
+
+        pauseMenu.classList.remove('active');
+        if (uiManager.inventoryVisible) uiManager.toggleInventory();
+        if (document.pointerLockElement) document.exitPointerLock();
+
+        if (save) await worldManager.saveWorld(s.meta.id, s.world, s.player);
+
+        s.abort.abort();      // снимает все keydown/pointerlock-слушатели сессии
+        engine.stop();         // останавливает цикл, вызывает onDestroy, чистит сцену
+        s.world.dispose();     // выгружает меши регионов
+        showScreen('screen-main');
+    }
 
     async function enterWorld(meta) {
-        if (gameStarted) return;
-        gameStarted = true;
+        if (session) return;
         await worldManager.touchWorld(meta.id);
         const saveData = await worldManager.loadWorld(meta.id);
         startGame(meta, saveData);
@@ -241,15 +262,54 @@ function main() {
         worldUpdater.update = (deltaTime) => world.update(deltaTime, player.transform.position);
         engine.addGameObject(worldUpdater);
 
-        // --- Setup Auto-Save and Inventory toggle ---
+        // --- Состояние UI сессии: playing | inventory | paused ---
+        // Захват курсора держится только в 'playing'. Все три оверлея
+        // (ничего / инвентарь / пауза) взаимоисключающи.
+        let uiState = 'playing';
+        const abort = new AbortController();
+
+        function enterPlaying() {
+            uiState = 'playing';
+            pauseMenu.classList.remove('active');
+            if (uiManager.inventoryVisible) uiManager.toggleInventory();
+            canvasEl.requestPointerLock();
+        }
+        function enterPaused() {
+            uiState = 'paused';
+            if (uiManager.inventoryVisible) uiManager.toggleInventory();
+            pauseMenu.classList.add('active');
+            if (document.pointerLockElement) document.exitPointerLock();
+        }
+        function toggleInventory() {
+            if (uiState === 'paused') return;
+            if (uiState === 'inventory') {
+                enterPlaying();
+            } else {
+                uiState = 'inventory';
+                uiManager.toggleInventory(); // открывает инвентарь и снимает захват курсора
+            }
+        }
+
         document.addEventListener('keydown', (e) => {
             if (e.code === 'KeyE') {
-                uiManager.toggleInventory();
-            }
-            if (e.code === 'KeyP') {
+                toggleInventory();
+            } else if (e.code === 'Escape') {
+                // Открытие паузы по Esc обрабатывает pointerlockchange (браузер
+                // сам снимает захват). Здесь только закрываем оверлеи обратно.
+                if (uiState !== 'playing') enterPlaying();
+            } else if (e.code === 'KeyP') {
                 worldManager.saveWorld(meta.id, world, player);
             }
-        });
+        }, { signal: abort.signal });
+
+        // Потеря захвата во время игры (Esc, alt-tab) → пауза.
+        document.addEventListener('pointerlockchange', () => {
+            if (!document.pointerLockElement && uiState === 'playing') {
+                enterPaused();
+            }
+        }, { signal: abort.signal });
+
+        session = { meta, world, player, abort, enterPlaying };
 
         // Start the engine
         engine.start();

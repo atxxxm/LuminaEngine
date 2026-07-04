@@ -291,6 +291,19 @@ export class World {
         delete this.regions[key];
     }
 
+    // Полная выгрузка мира при выходе в меню: убирает все меши регионов
+    // из сцены и освобождает их геометрию. World не является gameObject,
+    // поэтому Engine.stop() до него не дотягивается — вызывается из main.js.
+    dispose() {
+        for (const key of Object.keys(this.regions)) {
+            const [rx, rz] = key.split(',').map(Number);
+            this.unloadRegion(rx, rz);
+        }
+        this.chunks = {};
+        this.regions = {};
+        this.streamQueue = [];
+    }
+
     // Начальная область вокруг точки спавна — грузится сразу и
     // синхронно, чтобы поиску точки спавна в main.js было куда встать.
     // Дальше подгрузку/выгрузку по мере движения игрока берёт на себя

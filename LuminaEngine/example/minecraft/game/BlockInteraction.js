@@ -28,6 +28,16 @@ export class BlockInteraction extends Component {
         this.engine.renderer.scene.add(this.blockOutline);
     }
 
+    onDestroy() {
+        // Обводка блока добавлена прямо в сцену — убираем при выходе.
+        if (this.blockOutline) {
+            this.engine.renderer.scene.remove(this.blockOutline);
+            this.blockOutline.geometry.dispose();
+            this.blockOutline.material.dispose();
+            this.blockOutline = null;
+        }
+    }
+
     update(deltaTime) {
         if (!this.engine.inputManager.isPointerLocked()) {
              this.blockOutline.visible = false;

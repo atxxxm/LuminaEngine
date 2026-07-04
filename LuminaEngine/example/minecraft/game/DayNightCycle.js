@@ -57,4 +57,15 @@ export class DayNightCycle extends Component {
         this.engine.renderer.scene.background = this.skyColor;
         this.fog.color = this.skyColor;
     }
+
+    onDestroy() {
+        // Свет и туман добавлены прямо в сцену, а не в transform, поэтому
+        // Engine.stop() их не уберёт — иначе каждый следующий заход в мир
+        // добавлял бы ещё одно солнце/ambient, а мир становился всё ярче.
+        const scene = this.engine.renderer.scene;
+        if (this.sun) scene.remove(this.sun);
+        if (this.ambientLight) scene.remove(this.ambientLight);
+        scene.fog = null;
+        scene.background = null;
+    }
 }
