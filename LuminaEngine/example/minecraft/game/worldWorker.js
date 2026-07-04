@@ -32,17 +32,18 @@ self.onmessage = async (e) => {
 
     if (m.type === 'mesh') {
         const md = generate_region_mesh(
-            m.voxels, m.rw, m.wh, m.rd, m.ox, m.oz,
+            m.voxels, m.light, m.rw, m.wh, m.rd, m.ox, m.oz,
             tables.isTransparent, tables.top, tables.bottom, tables.side
         );
         const positions = md.positions;
         const normals = md.normals;
         const uvs = md.uvs;
+        const colors = md.colors;
         const indices = md.indices;
         const groups = md.groups;
         self.postMessage(
-            { id: m.id, positions, normals, uvs, indices, groups },
-            [positions.buffer, normals.buffer, uvs.buffer, indices.buffer, groups.buffer]
+            { id: m.id, positions, normals, uvs, colors, indices, groups },
+            [positions.buffer, normals.buffer, uvs.buffer, colors.buffer, indices.buffer, groups.buffer]
         );
         return;
     }

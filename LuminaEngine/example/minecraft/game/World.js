@@ -23,6 +23,8 @@ const RENDER_DISTANCE_REGIONS = 3;
 const REGIONS_PER_FRAME = 2;
 const REMESH_PER_FRAME = 2;
 
+const LIGHT_NEIGHBORS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
 // Текстуры и материалы одинаковы для всех регионов и не меняются между
 // перестроениями меша, поэтому кэшируем их на уровне модуля.
 const textureLoader = new THREE.TextureLoader();
@@ -46,13 +48,16 @@ function getMaterial(textureName) {
         materialCache[textureName] = new THREE.MeshLambertMaterial({
             map: textureCache[textureName],
             transparent: isTransparent,
-            alphaTest: isTransparent ? 0.5 : 0
+            alphaTest: isTransparent ? 0.5 : 0,
+            // Свет от факелов приходит как per-vertex цвет из мешера (см.
+            // lumina-meshing) — без этого флага он бы тихо игнорировался.
+            vertexColors: true,
         });
     }
     return materialCache[textureName];
 }
 
-// Для блоков без текстуры (вода/песок/снег): плоский цвет вместо картинки.
+// Для блоков без текстуры (вода/факел): плоский цвет вместо картинки.
 function getColorMaterial(colorHex, opacity) {
     const key = `color:${colorHex}`;
     if (!materialCache[key]) {
@@ -61,6 +66,7 @@ function getColorMaterial(colorHex, opacity) {
             color: colorHex,
             transparent: isTransparent,
             opacity: isTransparent ? opacity : 1,
+            vertexColors: true,
         });
     }
     return materialCache[key];
@@ -109,7 +115,7 @@ for (const idKey of Object.keys(BLOCK.properties)) {
 
 // --- Бэкенды генерации/мешинга -------------------------------------------
 // Единый интерфейс: genChunk() -> Promise<Uint8Array>,
-// meshRegion() -> Promise<{positions,normals,uvs,indices,groups}>.
+// meshRegion() -> Promise<{positions,normals,uvs,colors,indices,groups}>.
 
 // Синхронный фолбэк: считает прямо на главном потоке (как было раньше).
 // Работает всегда — используется, пока/если воркер недоступен.
@@ -117,13 +123,13 @@ const localBackend = {
     genChunk(cx, cz, seed) {
         return Promise.resolve(generate_chunk_voxels(cx, cz, CHUNK_SIZE, WORLD_HEIGHT, seed));
     },
-    meshRegion(voxels, rw, wh, rd, ox, oz) {
+    meshRegion(voxels, light, rw, wh, rd, ox, oz) {
         const md = generate_region_mesh(
-            voxels, rw, wh, rd, ox, oz,
+            voxels, light, rw, wh, rd, ox, oz,
             isTransparentTable, topMaterialTable, bottomMaterialTable, sideMaterialTable
         );
         return Promise.resolve({
-            positions: md.positions, normals: md.normals, uvs: md.uvs,
+            positions: md.positions, normals: md.normals, uvs: md.uvs, colors: md.colors,
             indices: md.indices, groups: md.groups,
         });
     },
@@ -149,13 +155,13 @@ class WorkerBackend {
             this.worker.postMessage({ type: 'genChunk', id, cx, cz, chunkSize: CHUNK_SIZE, worldHeight: WORLD_HEIGHT, seed });
         });
     }
-    meshRegion(voxels, rw, wh, rd, ox, oz) {
+    meshRegion(voxels, light, rw, wh, rd, ox, oz) {
         return new Promise((resolve) => {
             const id = this.nextId++;
             this.pending.set(id, (m) => resolve(m));
-            // Передаём буфер вокселей воркеру (главному потоку эта временная
-            // копия больше не нужна).
-            this.worker.postMessage({ type: 'mesh', id, voxels, rw, wh, rd, ox, oz }, [voxels.buffer]);
+            // Передаём буферы воркеру (главному потоку эти временные копии
+            // больше не нужны).
+            this.worker.postMessage({ type: 'mesh', id, voxels, light, rw, wh, rd, ox, oz }, [voxels.buffer, light.buffer]);
         });
     }
     dispose() {
@@ -169,6 +175,11 @@ class Chunk {
         this.x = x;
         this.z = z;
         this.data = new Uint8Array(CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE);
+        // Уровень света от факелов (0..15) на воксель — отдельный от данных
+        // блока канал. Новый чанк всегда начинается тёмным: генератор мира
+        // не размещает светящихся блоков, свет появляется только когда
+        // игрок ставит факел (см. World.propagateLight).
+        this.light = new Uint8Array(CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE);
     }
 
     getVoxel(x, y, z) {
@@ -182,6 +193,19 @@ class Chunk {
     setVoxel(x, y, z, value) {
         const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
         this.data[index] = value;
+    }
+
+    getLight(x, y, z) {
+        if (x < 0 || x >= CHUNK_SIZE || y < 0 || y >= WORLD_HEIGHT || z < 0 || z >= CHUNK_SIZE) {
+            return 0;
+        }
+        const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+        return this.light[index];
+    }
+
+    setLight(x, y, z, value) {
+        const index = y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+        this.light[index] = value;
     }
 }
 
@@ -281,12 +305,124 @@ export class World {
             chunk = this.generateChunkData(chunkX, chunkZ);
         }
         if (chunk) {
+            const oldValue = chunk.getVoxel(localX, y, localZ);
             chunk.setVoxel(localX, y, localZ, value);
             const regionX = Math.floor(chunkX / REGION_SIZE);
             const regionZ = Math.floor(chunkZ / REGION_SIZE);
             const region = this.getRegion(regionX, regionZ);
             if (region) {
                 region.needsUpdate = true;
+            }
+            this.updateLightAt(x, y, z, oldValue, value);
+        }
+    }
+
+    // --- Освещение от факелов (BFS, отдельный канал от данных блока) --------
+    // Skylight/аmbient остаются глобальными (DayNightCycle) — здесь только
+    // локальный свет от светящихся блоков, который ДОБАВЛЯЕТ яркость поверх
+    // обычного освещения сцены (см. lumina-meshing: цвет вершины 1.0 + свет).
+
+    getLight(x, y, z) {
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        const chunk = this.getChunk(chunkX, chunkZ);
+        if (!chunk) return 0;
+        return chunk.getLight(x - chunkX * CHUNK_SIZE, y, z - chunkZ * CHUNK_SIZE);
+    }
+
+    // Пишет значение света и помечает владеющий регион (и соседа, если
+    // воксель на самой кромке чанка — свет соседнего региона мог измениться
+    // на стыке) на перестроение меша. Ничего не делает для незагруженных
+    // чанков — свет туда просто не распространяется.
+    setLightRaw(x, y, z, value) {
+        const chunkX = Math.floor(x / CHUNK_SIZE);
+        const chunkZ = Math.floor(z / CHUNK_SIZE);
+        const chunk = this.getChunk(chunkX, chunkZ);
+        if (!chunk) return;
+        const localX = x - chunkX * CHUNK_SIZE;
+        const localZ = z - chunkZ * CHUNK_SIZE;
+        if (chunk.getLight(localX, y, localZ) === value) return;
+        chunk.setLight(localX, y, localZ, value);
+
+        const regionX = Math.floor(chunkX / REGION_SIZE);
+        const regionZ = Math.floor(chunkZ / REGION_SIZE);
+        const region = this.getRegion(regionX, regionZ);
+        if (region) region.needsUpdate = true;
+    }
+
+    // BFS-распространение света "наружу" от источника/уже установленного
+    // значения. Не заходит в непрозрачные блоки (свет через них не проходит).
+    propagateLight(x, y, z, level) {
+        this.setLightRaw(x, y, z, level);
+        const queue = [[x, y, z, level]];
+        while (queue.length) {
+            const [cx, cy, cz, clevel] = queue.shift();
+            if (clevel <= 1) continue;
+            const nextLevel = clevel - 1;
+            for (const [dx, dy, dz] of LIGHT_NEIGHBORS) {
+                const nx = cx + dx, ny = cy + dy, nz = cz + dz;
+                if (!BLOCK.get(this.getVoxel(nx, ny, nz)).isTransparent) continue;
+                if (this.getLight(nx, ny, nz) < nextLevel) {
+                    this.setLightRaw(nx, ny, nz, nextLevel);
+                    queue.push([nx, ny, nz, nextLevel]);
+                }
+            }
+        }
+    }
+
+    // "Разсвет": гасит распространённый от (x,y,z) свет и, если по соседству
+    // есть независимые источники (свет от них тоже доходил сюда), досвечивает
+    // область заново от них. Стандартный алгоритм light removal для
+    // voxel-движков (иначе после удаления факела темнота не восстановится
+    // корректно — соседние области либо останутся мёртво-тёмными, либо
+    // мёртво-светлыми).
+    unlight(x, y, z) {
+        const level = this.getLight(x, y, z);
+        if (level === 0) return;
+        this.setLightRaw(x, y, z, 0);
+
+        const removalQueue = [[x, y, z, level]];
+        const relightSeeds = [];
+        while (removalQueue.length) {
+            const [cx, cy, cz, clevel] = removalQueue.shift();
+            for (const [dx, dy, dz] of LIGHT_NEIGHBORS) {
+                const nx = cx + dx, ny = cy + dy, nz = cz + dz;
+                const nl = this.getLight(nx, ny, nz);
+                if (nl === 0) continue;
+                if (nl < clevel) {
+                    this.setLightRaw(nx, ny, nz, 0);
+                    removalQueue.push([nx, ny, nz, nl]);
+                } else {
+                    relightSeeds.push([nx, ny, nz]);
+                }
+            }
+        }
+        for (const [rx, ry, rz] of relightSeeds) {
+            const current = this.getLight(rx, ry, rz); // могли уже погасить выше в этом же проходе
+            if (current > 0) this.propagateLight(rx, ry, rz, current);
+        }
+    }
+
+    // Реагирует на смену блока в (x,y,z): гасит/распространяет свет исходя
+    // из того, был/стал ли блок источником и/или изменил проходимость света.
+    updateLightAt(x, y, z, oldBlockId, newBlockId) {
+        const oldProps = BLOCK.get(oldBlockId);
+        const newProps = BLOCK.get(newBlockId);
+        const oldEmits = oldProps.lightLevel || 0;
+        const newEmits = newProps.lightLevel || 0;
+
+        if (oldEmits > 0 || (!newProps.isTransparent && this.getLight(x, y, z) > 0)) {
+            this.unlight(x, y, z);
+        }
+
+        if (newEmits > 0) {
+            this.propagateLight(x, y, z, newEmits);
+        } else if (!oldProps.isTransparent && newProps.isTransparent) {
+            // Открыли ранее непрозрачную клетку (например, сломали камень) —
+            // свет соседей может теперь протечь сюда.
+            for (const [dx, dy, dz] of LIGHT_NEIGHBORS) {
+                const nl = this.getLight(x + dx, y + dy, z + dz);
+                if (nl > 1) this.propagateLight(x + dx, y + dy, z + dz, nl);
             }
         }
     }
@@ -333,21 +469,24 @@ export class World {
         if (promises.length) await Promise.all(promises);
     }
 
-    // Собирает воксели региона с рамкой в 1 блок в плоский буфер (свежий —
-    // потом он передаётся воркеру как transferable).
-    buildPaddedBuffer(ox, oz, rw, rd) {
+    // Собирает воксели и свет региона с рамкой в 1 блок в плоские буферы
+    // (свежие — потом передаются воркеру как transferable).
+    buildPaddedBuffers(ox, oz, rw, rd) {
         const pw = rw + 2;
         const pd = rd + 2;
         const voxels = new Uint8Array(pw * WORLD_HEIGHT * pd);
+        const light = new Uint8Array(pw * WORLD_HEIGHT * pd);
         for (let y = 0; y < WORLD_HEIGHT; y++) {
             for (let lz = -1; lz <= rd; lz++) {
                 const row = y * pw * pd + (lz + 1) * pw;
                 for (let lx = -1; lx <= rw; lx++) {
-                    voxels[row + (lx + 1)] = this.getVoxel(ox + lx, y, oz + lz);
+                    const idx = row + (lx + 1);
+                    voxels[idx] = this.getVoxel(ox + lx, y, oz + lz);
+                    light[idx] = this.getLight(ox + lx, y, oz + lz);
                 }
             }
         }
-        return voxels;
+        return { voxels, light };
     }
 
     // Асинхронно строит/перестраивает меш региона через бэкенд.
@@ -358,11 +497,11 @@ export class World {
 
         const ox = region.rx * REGION_BLOCK_SIZE;
         const oz = region.rz * REGION_BLOCK_SIZE;
-        const voxels = this.buildPaddedBuffer(ox, oz, REGION_BLOCK_SIZE, REGION_BLOCK_SIZE);
+        const { voxels, light } = this.buildPaddedBuffers(ox, oz, REGION_BLOCK_SIZE, REGION_BLOCK_SIZE);
 
         let md;
         try {
-            md = await this.backend.meshRegion(voxels, REGION_BLOCK_SIZE, WORLD_HEIGHT, REGION_BLOCK_SIZE, ox, oz);
+            md = await this.backend.meshRegion(voxels, light, REGION_BLOCK_SIZE, WORLD_HEIGHT, REGION_BLOCK_SIZE, ox, oz);
         } finally {
             region.meshing = false;
         }
@@ -385,6 +524,7 @@ export class World {
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(md.positions, 3));
         geometry.setAttribute('normal', new THREE.Float32BufferAttribute(md.normals, 3));
         geometry.setAttribute('uv', new THREE.Float32BufferAttribute(md.uvs, 2));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(md.colors, 3));
         geometry.setIndex(new THREE.Uint32BufferAttribute(md.indices, 1));
 
         const groups = md.groups;
@@ -399,6 +539,8 @@ export class World {
             region.mesh.geometry.dispose();
         }
         region.mesh = new THREE.Mesh(geometry, globalMaterials);
+        region.mesh.castShadow = true;
+        region.mesh.receiveShadow = true;
         this.scene.add(region.mesh);
     }
 

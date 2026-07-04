@@ -9,6 +9,13 @@
 // стороны сразу (соседние полупрозрачные блоки, например листва рядом с
 // листвой) — поэтому вместо одной маски со знаком используются две
 // независимые маски (front/back).
+//
+// Освещение от факелов: свет хранится отдельным каналом (0..15 на воксель,
+// BFS-распространение считает JS/World.js) и подмешивается как per-vertex
+// цвет — среднее по 4 клеткам вокруг угла квада ("smooth lighting", как в
+// Minecraft). Это НЕ мешает greedy-мерджу: свет варьируется по вершинам
+// одного и того же квада плавно (интерполяция на GPU), группировка по
+// материалу для draw call'ов не меняется вообще.
 
 use wasm_bindgen::prelude::*;
 
@@ -17,6 +24,7 @@ pub struct MeshData {
     positions: Vec<f32>,
     normals: Vec<f32>,
     uvs: Vec<f32>,
+    colors: Vec<f32>,
     indices: Vec<u32>,
     // Плоский список троек (start, count, materialIndex) — как аргументы
     // THREE.BufferGeometry.addGroup().
@@ -38,6 +46,10 @@ impl MeshData {
         self.uvs.clone()
     }
     #[wasm_bindgen(getter)]
+    pub fn colors(&self) -> Vec<f32> {
+        self.colors.clone()
+    }
+    #[wasm_bindgen(getter)]
     pub fn indices(&self) -> Vec<u32> {
         self.indices.clone()
     }
@@ -47,8 +59,8 @@ impl MeshData {
     }
 }
 
-// Ссылка на уже записанные в positions/normals/uvs 4 вершины квада — сама
-// геометрия квада уже построена, здесь только то, что нужно, чтобы потом
+// Ссылка на уже записанные в positions/normals/uvs/colors 4 вершины квада —
+// сама геометрия уже построена, здесь только то, что нужно, чтобы потом
 // собрать индексы в правильном порядке (материал, направление грани).
 struct QuadRef {
     base: u32,
@@ -60,6 +72,7 @@ struct Builder {
     positions: Vec<f32>,
     normals: Vec<f32>,
     uvs: Vec<f32>,
+    colors: Vec<f32>,
     quads: Vec<QuadRef>,
 }
 
@@ -69,10 +82,12 @@ impl Builder {
             positions: Vec::new(),
             normals: Vec::new(),
             uvs: Vec::new(),
+            colors: Vec::new(),
             quads: Vec::new(),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_quad(
         &mut self,
         p0: [f32; 3],
@@ -85,6 +100,7 @@ impl Builder {
         back: bool,
         material: u32,
         swap_uv: bool,
+        corner_lights: [f32; 4],
     ) {
         let base = (self.positions.len() / 3) as u32;
         for p in [p0, p1, p2, p3] {
@@ -105,6 +121,17 @@ impl Builder {
             self.uvs.extend_from_slice(&[0.0, 0.0, w, 0.0, w, h, 0.0, h]);
         }
 
+        // Свет от факелов ДОБАВЛЯЕТ яркость поверх обычного ламберт-освещения
+        // (солнце/ambient), а не заменяет его — иначе пришлось бы отдельно
+        // считать skylight, тени и т.п. Без факелов рядом цвет = (1,1,1),
+        // то есть визуально ничего не меняется по сравнению с тем, что было
+        // до этой правки.
+        const BRIGHTEN: f32 = 1.6;
+        for l in corner_lights {
+            let c = 1.0 + l * BRIGHTEN;
+            self.colors.extend_from_slice(&[c, c, c]);
+        }
+
         self.quads.push(QuadRef { base, material, back });
     }
 
@@ -116,7 +143,7 @@ impl Builder {
     // отдельный вызов отрисовки (draw call) независимо от того, совпадает
     // ли материал с соседней группой, поэтому это не косметика, а разница
     // на порядки в числе draw call'ов на регион.
-    fn finish(mut self) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>) {
+    fn finish(mut self) -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<u32>, Vec<u32>) {
         self.quads.sort_by_key(|q| q.material);
 
         let mut indices = Vec::with_capacity(self.quads.len() * 6);
@@ -142,23 +169,26 @@ impl Builder {
             }
         }
 
-        (self.positions, self.normals, self.uvs, indices, groups)
+        (self.positions, self.normals, self.uvs, self.colors, indices, groups)
     }
 }
 
 /// Строит меш одного региона.
 ///
-/// `voxels` — плоский массив вокселей региона, дополненный по X и Z рамкой
-/// в 1 блок с каждой стороны (нужна для корректного отсечения граней на
-/// стыке с соседними регионами): размер (width+2) * height * (depth+2),
-/// индекс = y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
+/// `voxels` / `light` — плоские массивы вокселей и уровня света (0..15)
+/// региона, дополненные по X и Z рамкой в 1 блок с каждой стороны (нужна для
+/// корректного отсечения граней и плавного света на стыке с соседними
+/// регионами): размер (width+2) * height * (depth+2), индекс =
+/// y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
 ///
 /// `is_transparent` / `top_material` / `bottom_material` / `side_material` —
 /// таблицы по block id (индекс = id вокселя), построенные один раз на JS
 /// стороне из BLOCK.properties.
 #[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
 pub fn generate_region_mesh(
     voxels: &[u8],
+    light: &[u8],
     width: u32,
     height: u32,
     depth: u32,
@@ -181,6 +211,14 @@ pub fn generate_region_mesh(
         }
         let idx = (ly as usize) * pw * pd + ((lz + 1) as usize) * pw + (lx + 1) as usize;
         voxels[idx]
+    };
+
+    let get_light = |lx: i32, ly: i32, lz: i32| -> u8 {
+        if ly < 0 || ly >= height {
+            return 0;
+        }
+        let idx = (ly as usize) * pw * pd + ((lz + 1) as usize) * pw + (lx + 1) as usize;
+        light[idx]
     };
 
     let transparent =
@@ -247,12 +285,12 @@ pub fn generate_region_mesh(
             x[d] += 1;
             let plane = x[d];
 
-            merge_and_emit(&mut b, &front_mask, un, vn, d, u, v, plane, false);
-            merge_and_emit(&mut b, &back_mask, un, vn, d, u, v, plane, true);
+            merge_and_emit(&mut b, &front_mask, un, vn, d, u, v, plane, false, &get_light);
+            merge_and_emit(&mut b, &back_mask, un, vn, d, u, v, plane, true, &get_light);
         }
     }
 
-    let (mut positions, normals, uvs, indices, groups) = b.finish();
+    let (mut positions, normals, uvs, colors, indices, groups) = b.finish();
 
     // Смещение региона в мировых координатах (по Y смещения нет — высота
     // столбца всегда абсолютна).
@@ -267,9 +305,35 @@ pub fn generate_region_mesh(
         positions,
         normals,
         uvs,
+        colors,
         indices,
         groups,
     }
+}
+
+// Свет для угла квада (iu, jv) в плоскости (u, v) на "открытой" стороне
+// грани (light_axis_pos) — среднее по 4 клеткам вокруг угла, как smooth
+// lighting в Minecraft (без учёта затенения соседями — упрощение).
+fn corner_light(
+    get_light: &dyn Fn(i32, i32, i32) -> u8,
+    d: usize,
+    u: usize,
+    v: usize,
+    light_axis_pos: i32,
+    iu: i32,
+    jv: i32,
+) -> f32 {
+    let mut sum = 0.0f32;
+    for du in [-1i32, 0] {
+        for dv in [-1i32, 0] {
+            let mut p = [0i32; 3];
+            p[d] = light_axis_pos;
+            p[u] = iu + du;
+            p[v] = jv + dv;
+            sum += get_light(p[0], p[1], p[2]) as f32;
+        }
+    }
+    (sum / 4.0 / 15.0).clamp(0.0, 1.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -283,8 +347,13 @@ fn merge_and_emit(
     v: usize,
     plane: i32,
     back: bool,
+    get_light: &dyn Fn(i32, i32, i32) -> u8,
 ) {
     let mut mask = mask.to_vec();
+    // Свет сэмплируется с "открытой" стороны грани: для front-квада это
+    // сторона B (plane), для back — сторона A (plane-1). Именно там воздух/
+    // прозрачный блок, через который вообще может быть свет.
+    let light_axis_pos = if back { plane - 1 } else { plane };
 
     for j in 0..vn {
         let mut i = 0usize;
@@ -335,7 +404,21 @@ fn merge_and_emit(
             let mut normal = [0f32; 3];
             normal[d] = if back { -1.0 } else { 1.0 };
 
-            b.push_quad(p0, p1, p2, p3, normal, w as f32, h as f32, back, material - 1, d == 0);
+            let iu = i as i32;
+            let jv = j as i32;
+            let wi = w as i32;
+            let hi = h as i32;
+            let corner_lights = [
+                corner_light(get_light, d, u, v, light_axis_pos, iu, jv),
+                corner_light(get_light, d, u, v, light_axis_pos, iu + wi, jv),
+                corner_light(get_light, d, u, v, light_axis_pos, iu + wi, jv + hi),
+                corner_light(get_light, d, u, v, light_axis_pos, iu, jv + hi),
+            ];
+
+            b.push_quad(
+                p0, p1, p2, p3, normal, w as f32, h as f32, back, material - 1, d == 0,
+                corner_lights,
+            );
 
             for l in 0..h {
                 for k in 0..w {

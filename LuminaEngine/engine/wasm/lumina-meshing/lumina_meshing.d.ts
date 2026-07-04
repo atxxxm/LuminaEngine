@@ -5,6 +5,7 @@ export class MeshData {
     private constructor();
     free(): void;
     [Symbol.dispose](): void;
+    readonly colors: Float32Array;
     readonly groups: Uint32Array;
     readonly indices: Uint32Array;
     readonly normals: Float32Array;
@@ -15,23 +16,25 @@ export class MeshData {
 /**
  * Строит меш одного региона.
  *
- * `voxels` — плоский массив вокселей региона, дополненный по X и Z рамкой
- * в 1 блок с каждой стороны (нужна для корректного отсечения граней на
- * стыке с соседними регионами): размер (width+2) * height * (depth+2),
- * индекс = y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
+ * `voxels` / `light` — плоские массивы вокселей и уровня света (0..15)
+ * региона, дополненные по X и Z рамкой в 1 блок с каждой стороны (нужна для
+ * корректного отсечения граней и плавного света на стыке с соседними
+ * регионами): размер (width+2) * height * (depth+2), индекс =
+ * y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
  *
  * `is_transparent` / `top_material` / `bottom_material` / `side_material` —
  * таблицы по block id (индекс = id вокселя), построенные один раз на JS
  * стороне из BLOCK.properties.
  */
-export function generate_region_mesh(voxels: Uint8Array, width: number, height: number, depth: number, origin_x: number, origin_z: number, is_transparent: Uint8Array, top_material: Uint16Array, bottom_material: Uint16Array, side_material: Uint16Array): MeshData;
+export function generate_region_mesh(voxels: Uint8Array, light: Uint8Array, width: number, height: number, depth: number, origin_x: number, origin_z: number, is_transparent: Uint8Array, top_material: Uint16Array, bottom_material: Uint16Array, side_material: Uint16Array): MeshData;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_meshdata_free: (a: number, b: number) => void;
-    readonly generate_region_mesh: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number) => number;
+    readonly generate_region_mesh: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => number;
+    readonly meshdata_colors: (a: number) => [number, number];
     readonly meshdata_groups: (a: number) => [number, number];
     readonly meshdata_indices: (a: number) => [number, number];
     readonly meshdata_normals: (a: number) => [number, number];

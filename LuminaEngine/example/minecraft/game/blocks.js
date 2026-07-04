@@ -14,6 +14,7 @@ export const BLOCK = {
     WATER: 9,
     SAND: 10,
     SNOW: 11,
+    TORCH: 12,
 
     // ВАЖНО: id блоков здесь должны совпадать с константами BLOCK_* в
     // crates/lumina-worldgen/src/lib.rs — генератор мира зашивает эти id
@@ -35,6 +36,12 @@ export const BLOCK = {
         9: { name: 'water', isBreakable: false, isTransparent: true, isSolid: false, color: 0x2b6bdb, opacity: 0.6 },
         10: { name: 'sand', isSolid: true, texture: 'sand.png' },
         11: { name: 'snow', isSolid: true, texture: 'snow.png' },
+        // Факел — источник света (World.js: BFS-распространение, см.
+        // propagateLight/unlight). Текстуры нет — упрощённый светящийся
+        // кубик цветом, не палка+пламя как в настоящем Minecraft.
+        // isSolid:false — не мешает проходу, isTransparent:true — не
+        // блокирует ни свет, ни соседние грани.
+        12: { name: 'torch', isSolid: false, isTransparent: true, isBreakable: true, lightLevel: 14, color: 0xffaa33 },
     },
 
     get(id) {

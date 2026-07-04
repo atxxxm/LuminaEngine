@@ -11,6 +11,8 @@ export class Renderer {
         this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
         this.coordsDisplay = document.getElementById('coords-display');
         this.fpsDisplay = document.getElementById('fps-display');

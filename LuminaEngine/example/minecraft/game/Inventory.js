@@ -23,6 +23,7 @@ export class Inventory extends Component {
         this.addItem(BLOCK.DIRT, 64);
         this.addItem(BLOCK.OAK_LOG, 64);
         this.addItem(BLOCK.OAK_LEAVES, 64);
+        this.addItem(BLOCK.TORCH, 16);
         this.updateUI();
     }
 

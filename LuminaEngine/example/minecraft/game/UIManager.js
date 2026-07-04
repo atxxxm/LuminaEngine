@@ -34,8 +34,16 @@ export class UIManager {
 
         if (item) {
             const blockProps = BLOCK.get(item.id);
-            const texture = typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture;
-            slot.style.backgroundImage = `url(textures/${texture})`;
+            if (blockProps.color !== undefined) {
+                // Блоки без текстуры (вода/факел) — иконка слота плоским
+                // цветом, как и сам блок в мире.
+                slot.style.backgroundImage = 'none';
+                slot.style.backgroundColor = `#${blockProps.color.toString(16).padStart(6, '0')}`;
+            } else {
+                const texture = typeof blockProps.texture === 'object' ? blockProps.texture.side : blockProps.texture;
+                slot.style.backgroundImage = `url(textures/${texture})`;
+                slot.style.backgroundColor = '';
+            }
             slot.title = blockProps.name || '';
 
             const count = document.createElement('div');

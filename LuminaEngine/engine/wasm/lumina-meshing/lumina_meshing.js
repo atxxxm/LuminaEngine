@@ -18,6 +18,15 @@ export class MeshData {
         wasm.__wbg_meshdata_free(ptr, 0);
     }
     /**
+     * @returns {Float32Array}
+     */
+    get colors() {
+        const ret = wasm.meshdata_colors(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @returns {Uint32Array}
      */
     get groups() {
@@ -68,15 +77,17 @@ if (Symbol.dispose) MeshData.prototype[Symbol.dispose] = MeshData.prototype.free
 /**
  * Строит меш одного региона.
  *
- * `voxels` — плоский массив вокселей региона, дополненный по X и Z рамкой
- * в 1 блок с каждой стороны (нужна для корректного отсечения граней на
- * стыке с соседними регионами): размер (width+2) * height * (depth+2),
- * индекс = y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
+ * `voxels` / `light` — плоские массивы вокселей и уровня света (0..15)
+ * региона, дополненные по X и Z рамкой в 1 блок с каждой стороны (нужна для
+ * корректного отсечения граней и плавного света на стыке с соседними
+ * регионами): размер (width+2) * height * (depth+2), индекс =
+ * y*(width+2)*(depth+2) + (z+1)*(width+2) + (x+1).
  *
  * `is_transparent` / `top_material` / `bottom_material` / `side_material` —
  * таблицы по block id (индекс = id вокселя), построенные один раз на JS
  * стороне из BLOCK.properties.
  * @param {Uint8Array} voxels
+ * @param {Uint8Array} light
  * @param {number} width
  * @param {number} height
  * @param {number} depth
@@ -88,18 +99,20 @@ if (Symbol.dispose) MeshData.prototype[Symbol.dispose] = MeshData.prototype.free
  * @param {Uint16Array} side_material
  * @returns {MeshData}
  */
-export function generate_region_mesh(voxels, width, height, depth, origin_x, origin_z, is_transparent, top_material, bottom_material, side_material) {
+export function generate_region_mesh(voxels, light, width, height, depth, origin_x, origin_z, is_transparent, top_material, bottom_material, side_material) {
     const ptr0 = passArray8ToWasm0(voxels, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(is_transparent, wasm.__wbindgen_malloc);
+    const ptr1 = passArray8ToWasm0(light, wasm.__wbindgen_malloc);
     const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray16ToWasm0(top_material, wasm.__wbindgen_malloc);
+    const ptr2 = passArray8ToWasm0(is_transparent, wasm.__wbindgen_malloc);
     const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArray16ToWasm0(bottom_material, wasm.__wbindgen_malloc);
+    const ptr3 = passArray16ToWasm0(top_material, wasm.__wbindgen_malloc);
     const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passArray16ToWasm0(side_material, wasm.__wbindgen_malloc);
+    const ptr4 = passArray16ToWasm0(bottom_material, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.generate_region_mesh(ptr0, len0, width, height, depth, origin_x, origin_z, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+    const ptr5 = passArray16ToWasm0(side_material, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ret = wasm.generate_region_mesh(ptr0, len0, ptr1, len1, width, height, depth, origin_x, origin_z, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
     return MeshData.__wrap(ret);
 }
 function __wbg_get_imports() {
